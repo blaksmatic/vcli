@@ -329,4 +329,48 @@ mod tests {
         assert_eq!(h.hex().len(), 64);
         assert!(h.hex().chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    use proptest::prelude::*;
+
+    fn arb_json_value(depth: u32) -> BoxedStrategy<Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i32>().prop_map(|n| Value::Number(n.into())),
+            "[a-zA-Z0-9 ]{0,20}".prop_map(Value::String),
+        ];
+        if depth == 0 {
+            leaf.boxed()
+        } else {
+            let inner = arb_json_value(depth - 1);
+            prop_oneof![
+                leaf,
+                proptest::collection::vec(inner.clone(), 0..5).prop_map(Value::Array),
+                proptest::collection::hash_map("[a-z]{1,6}", inner, 0..5)
+                    .prop_map(|m| Value::Object(m.into_iter().collect())),
+            ]
+            .boxed()
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn canonical_invariant_under_key_shuffle(v in arb_json_value(3)) {
+            // Round-trip v through a new Value by reserializing — serde_json::Map
+            // preserves insertion order, so the regenerated Map may have different
+            // ordering than the original. canonicalize must erase that.
+            let s = serde_json::to_string(&v).unwrap();
+            let v2: Value = serde_json::from_str(&s).unwrap();
+            prop_assert_eq!(canonicalize(&v).unwrap(), canonicalize(&v2).unwrap());
+        }
+
+        #[test]
+        fn hash_is_stable_across_whitespace_variants(v in arb_json_value(2)) {
+            let compact = serde_json::to_string(&v).unwrap();
+            let pretty = serde_json::to_string_pretty(&v).unwrap();
+            let v_compact: Value = serde_json::from_str(&compact).unwrap();
+            let v_pretty: Value = serde_json::from_str(&pretty).unwrap();
+            prop_assert_eq!(predicate_hash(&v_compact).unwrap(), predicate_hash(&v_pretty).unwrap());
+        }
+    }
 }
