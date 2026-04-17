@@ -13,3 +13,7 @@
 pub mod error;
 
 pub use error::{IpcError, IpcResult};
+
+pub mod socket_path;
+
+pub use socket_path::{default_socket_path, SocketPath};
