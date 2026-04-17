@@ -8,7 +8,7 @@
 //! Windows is a stub (`unimplemented!()`). See the v0 spec §Input synthesis
 //! and §Action confirmation for the contract this crate implements.
 
-#![forbid(unsafe_code)] // relaxed inside macos/cg_events.rs via targeted allow
+#![deny(unsafe_code)] // relaxed inside macos/ submodules via module-level #![allow(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -33,3 +33,13 @@ pub use mock::MockInputSink;
 pub mod keymap;
 
 pub use keymap::{macos_keycode, CanonicalKey};
+
+pub mod permissions;
+
+pub use permissions::{PermissionReport, PermissionStatus};
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+#[cfg(target_os = "windows")]
+pub mod windows;

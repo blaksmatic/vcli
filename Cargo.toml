@@ -26,7 +26,7 @@ unicode-normalization = "0.1"
 proptest = "1"
 
 # Platform-specific (used by vcli-input + vcli-capture later)
-core-graphics = "0.24"
+core-graphics = { version = "0.24", features = ["highsierra"] }
 core-foundation = "0.10"
 libc = "0.2"
 tempfile = "3"
