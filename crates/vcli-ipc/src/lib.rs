@@ -35,3 +35,7 @@ pub use handler::{Handler, StreamSender};
 pub mod server;
 
 pub use server::IpcServer;
+
+pub mod client;
+
+pub use client::IpcClient;
