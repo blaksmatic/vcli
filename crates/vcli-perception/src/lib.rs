@@ -43,3 +43,5 @@ pub mod template;
 pub use template::TemplateEvaluator;
 
 pub mod perception;
+
+pub use perception::Perception;
