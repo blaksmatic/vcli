@@ -127,6 +127,7 @@ fn try_tmp_fallback() -> PathBuf {
     PathBuf::from(format!("/tmp/vcli-{}.sock", uid()))
 }
 
+#[cfg(target_os = "macos")]
 fn sock_in_dir(dir: &Path) -> Option<PathBuf> {
     if dir.as_os_str().is_empty() {
         return None;
