@@ -30,3 +30,7 @@ pub use region::{Anchor, Region, WindowIndex};
 pub mod predicate;
 
 pub use predicate::{MatchData, Predicate, PredicateKind, PredicateResult};
+
+pub mod action;
+
+pub use action::{Button, InputAction, Modifier};
