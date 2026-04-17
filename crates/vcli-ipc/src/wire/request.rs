@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn list_with_no_filter_omits_params_field() {
-        let req = Request { id: RequestId::new(), op: RequestOp::List { state: None } };
+        let req = Request {
+            id: RequestId::new(),
+            op: RequestOp::List { state: None },
+        };
         let j = serde_json::to_string(&req).unwrap();
         assert!(j.contains(r#""op":"list""#), "{j}");
         let back: Request = serde_json::from_str(&j).unwrap();
@@ -157,7 +160,10 @@ mod tests {
 
     #[test]
     fn cancel_requires_program_id() {
-        let req = Request { id: RequestId::new(), op: RequestOp::Cancel { program_id: pid() } };
+        let req = Request {
+            id: RequestId::new(),
+            op: RequestOp::Cancel { program_id: pid() },
+        };
         let j = serde_json::to_string(&req).unwrap();
         assert!(j.contains(r#""op":"cancel""#), "{j}");
         let back: Request = serde_json::from_str(&j).unwrap();
@@ -168,7 +174,10 @@ mod tests {
     fn resume_from_start_flag_roundtrips() {
         let req = Request {
             id: RequestId::new(),
-            op: RequestOp::Resume { program_id: pid(), from_start: true },
+            op: RequestOp::Resume {
+                program_id: pid(),
+                from_start: true,
+            },
         };
         let j = serde_json::to_string(&req).unwrap();
         assert!(j.contains(r#""from_start":true"#), "{j}");
@@ -179,7 +188,10 @@ mod tests {
     #[test]
     fn health_gc_shutdown_have_no_params() {
         for op in [RequestOp::Health, RequestOp::Gc, RequestOp::Shutdown] {
-            let req = Request { id: RequestId::new(), op: op.clone() };
+            let req = Request {
+                id: RequestId::new(),
+                op: op.clone(),
+            };
             let j = serde_json::to_string(&req).unwrap();
             let back: Request = serde_json::from_str(&j).unwrap();
             assert_eq!(back, req);

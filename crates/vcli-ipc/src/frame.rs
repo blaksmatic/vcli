@@ -14,16 +14,26 @@ use crate::error::{IpcError, IpcResult};
 pub const MAX_FRAME_LEN: u32 = 4 * 1024 * 1024;
 
 /// Serialize `value` to JSON and write a length-prefixed frame.
+///
+/// # Errors
+/// Returns `IpcError::FrameTooLarge` if the serialized payload exceeds
+/// `MAX_FRAME_LEN`, `IpcError::InvalidJson` for serialization failure, or
+/// `IpcError::Io` for write failures.
 pub async fn write_frame<W, T>(w: &mut W, value: &T) -> IpcResult<()>
 where
     W: AsyncWriteExt + Unpin,
     T: Serialize,
 {
     let bytes = serde_json::to_vec(value)?;
-    let len = u32::try_from(bytes.len())
-        .map_err(|_| IpcError::FrameTooLarge { len: u32::MAX, max: MAX_FRAME_LEN })?;
+    let len = u32::try_from(bytes.len()).map_err(|_| IpcError::FrameTooLarge {
+        len: u32::MAX,
+        max: MAX_FRAME_LEN,
+    })?;
     if len > MAX_FRAME_LEN {
-        return Err(IpcError::FrameTooLarge { len, max: MAX_FRAME_LEN });
+        return Err(IpcError::FrameTooLarge {
+            len,
+            max: MAX_FRAME_LEN,
+        });
     }
     w.write_all(&len.to_be_bytes()).await?;
     w.write_all(&bytes).await?;
@@ -36,6 +46,10 @@ where
 /// Returns `Err(IpcError::UnexpectedEof { got: 0, expected: 4 })` on clean EOF
 /// before any bytes of the next header — callers use this to detect graceful
 /// peer shutdown between frames.
+///
+/// # Errors
+/// Returns `IpcError::UnexpectedEof`, `IpcError::FrameTooLarge`,
+/// `IpcError::InvalidJson`, or `IpcError::Io` as appropriate.
 pub async fn read_frame<R, T>(r: &mut R) -> IpcResult<T>
 where
     R: AsyncReadExt + Unpin,
@@ -46,13 +60,19 @@ where
     while filled < 4 {
         let n = r.read(&mut hdr[filled..]).await?;
         if n == 0 {
-            return Err(IpcError::UnexpectedEof { got: filled, expected: 4 });
+            return Err(IpcError::UnexpectedEof {
+                got: filled,
+                expected: 4,
+            });
         }
         filled += n;
     }
     let len = u32::from_be_bytes(hdr);
     if len > MAX_FRAME_LEN {
-        return Err(IpcError::FrameTooLarge { len, max: MAX_FRAME_LEN });
+        return Err(IpcError::FrameTooLarge {
+            len,
+            max: MAX_FRAME_LEN,
+        });
     }
     let len_usize = len as usize;
     let mut buf = vec![0u8; len_usize];
@@ -60,7 +80,10 @@ where
     while filled < len_usize {
         let n = r.read(&mut buf[filled..]).await?;
         if n == 0 {
-            return Err(IpcError::UnexpectedEof { got: filled, expected: len_usize });
+            return Err(IpcError::UnexpectedEof {
+                got: filled,
+                expected: len_usize,
+            });
         }
         filled += n;
     }
@@ -82,7 +105,10 @@ mod tests {
     #[tokio::test]
     async fn roundtrip_simple_value() {
         let (mut a, mut b) = duplex(256);
-        let sent = Msg { id: 7, text: "hi".into() };
+        let sent = Msg {
+            id: 7,
+            text: "hi".into(),
+        };
         write_frame(&mut a, &sent).await.unwrap();
         let got: Msg = read_frame(&mut b).await.unwrap();
         assert_eq!(got, sent);
@@ -91,8 +117,14 @@ mod tests {
     #[tokio::test]
     async fn roundtrip_two_frames_back_to_back() {
         let (mut a, mut b) = duplex(256);
-        let m1 = Msg { id: 1, text: "one".into() };
-        let m2 = Msg { id: 2, text: "two".into() };
+        let m1 = Msg {
+            id: 1,
+            text: "one".into(),
+        };
+        let m2 = Msg {
+            id: 2,
+            text: "two".into(),
+        };
         write_frame(&mut a, &m1).await.unwrap();
         write_frame(&mut a, &m2).await.unwrap();
         let got1: Msg = read_frame(&mut b).await.unwrap();
@@ -115,7 +147,10 @@ mod tests {
         // Write header one byte at a time, then body, to ensure the reader
         // correctly loops over `read()` returns < requested.
         let (mut a, mut b) = duplex(1);
-        let sent = Msg { id: 42, text: "partial".into() };
+        let sent = Msg {
+            id: 42,
+            text: "partial".into(),
+        };
         let writer = tokio::spawn(async move {
             write_frame(&mut a, &sent).await.unwrap();
         });
@@ -140,7 +175,13 @@ mod tests {
         let (a, mut b) = duplex(64);
         drop(a); // peer closes with no bytes sent
         let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
-        assert!(matches!(err, IpcError::UnexpectedEof { got: 0, expected: 4 }));
+        assert!(matches!(
+            err,
+            IpcError::UnexpectedEof {
+                got: 0,
+                expected: 4
+            }
+        ));
     }
 
     #[tokio::test]
@@ -151,7 +192,13 @@ mod tests {
         a.write_all(&[0u8; 10]).await.unwrap();
         drop(a);
         let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
-        assert!(matches!(err, IpcError::UnexpectedEof { got: 10, expected: 100 }));
+        assert!(matches!(
+            err,
+            IpcError::UnexpectedEof {
+                got: 10,
+                expected: 100
+            }
+        ));
     }
 
     #[tokio::test]

@@ -49,7 +49,10 @@ async fn client_drop_midstream_does_not_crash_server() {
 
     // Connect, start stream, drop immediately.
     let client = IpcClient::connect(&path).await.unwrap();
-    let stream = client.request_stream(RequestOp::Events { follow: false }).await.unwrap();
+    let stream = client
+        .request_stream(RequestOp::Events { follow: false })
+        .await
+        .unwrap();
     drop(stream);
 
     // A second client should still be serviceable.

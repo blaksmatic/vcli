@@ -1,11 +1,9 @@
 //! Pluggable business-logic boundary. `vcli-ipc` does not know about programs,
-//! the scheduler, or SQLite — it just serializes calls. The daemon crate (or a
+//! the scheduler, or `SQLite` — it just serializes calls. The daemon crate (or a
 //! test double) implements this trait.
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-
-use vcli_core::{ErrorPayload, ProgramId};
 
 use crate::error::IpcResult;
 use crate::wire::request::{RequestId, RequestOp};
@@ -39,17 +37,15 @@ pub trait Handler: Send + Sync + 'static {
     /// ends or the client drops. `follow` semantics for `logs`/`events` live
     /// inside the handler. When the handler returns, the server sends a final
     /// `end_of_stream` frame automatically.
-    async fn handle_stream(
-        &self,
-        id: RequestId,
-        op: RequestOp,
-        tx: StreamSender,
-    ) -> IpcResult<()>;
+    async fn handle_stream(&self, id: RequestId, op: RequestOp, tx: StreamSender) -> IpcResult<()>;
 
     /// Classification helper: `true` if `op` should be dispatched via
     /// `handle_stream`, `false` if via `handle`. Default covers the v0 ops.
     fn is_streaming(&self, op: &RequestOp) -> bool {
-        matches!(op, RequestOp::Logs { .. } | RequestOp::Events { .. } | RequestOp::Trace { .. })
+        matches!(
+            op,
+            RequestOp::Logs { .. } | RequestOp::Events { .. } | RequestOp::Trace { .. }
+        )
     }
 }
 
@@ -58,10 +54,13 @@ pub trait Handler: Send + Sync + 'static {
 /// Exposed unconditionally so that integration tests (separate compilation
 /// units) can import it. No prod code should use it.
 pub mod test_double {
-    use super::*;
     use std::sync::Arc;
+
+    use async_trait::async_trait;
     use tokio::sync::Mutex;
-    use vcli_core::ErrorCode;
+    use vcli_core::{ErrorCode, ErrorPayload, Event, EventData, ProgramId};
+
+    use super::{Handler, IpcResult, RequestId, RequestOp, Response, StreamFrame, StreamSender};
 
     /// In-memory handler that records every op dispatched to it.
     #[derive(Debug, Default, Clone)]
@@ -86,13 +85,17 @@ pub mod test_double {
                 RequestOp::Status { program_id } | RequestOp::Start { program_id } => {
                     Response::ok(id, serde_json::json!({ "program_id": program_id }))
                 }
-                RequestOp::Resume { program_id, from_start } => Response::ok(
+                RequestOp::Resume {
+                    program_id,
+                    from_start,
+                } => Response::ok(
                     id,
                     serde_json::json!({ "program_id": program_id, "from_start": from_start }),
                 ),
-                RequestOp::List { state } => {
-                    Response::ok(id, serde_json::json!({ "state_filter": state, "items": [] }))
-                }
+                RequestOp::List { state } => Response::ok(
+                    id,
+                    serde_json::json!({ "state_filter": state, "items": [] }),
+                ),
                 RequestOp::Health => Response::ok(id, serde_json::json!({ "ok": true })),
                 RequestOp::Gc => Response::ok(id, serde_json::json!({ "gc": "ok" })),
                 RequestOp::Shutdown => Response::ok(id, serde_json::json!({ "bye": true })),
@@ -114,10 +117,23 @@ pub mod test_double {
             tx: StreamSender,
         ) -> IpcResult<()> {
             self.received.lock().await.push(op.clone());
-            use vcli_core::{Event, EventData};
             let two = [
-                StreamFrame::event(id, Event { at: 1, data: EventData::DaemonStarted { version: "0.0.1".into() } }),
-                StreamFrame::event(id, Event { at: 2, data: EventData::DaemonStopped }),
+                StreamFrame::event(
+                    id,
+                    Event {
+                        at: 1,
+                        data: EventData::DaemonStarted {
+                            version: "0.0.1".into(),
+                        },
+                    },
+                ),
+                StreamFrame::event(
+                    id,
+                    Event {
+                        at: 2,
+                        data: EventData::DaemonStopped,
+                    },
+                ),
             ];
             for f in two {
                 if tx.send(f).await.is_err() {
@@ -131,7 +147,10 @@ pub mod test_double {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use async_trait::async_trait;
+    use vcli_core::ProgramId;
+
+    use super::{Handler, IpcResult, RequestId, RequestOp, Response, StreamSender};
 
     #[test]
     fn is_streaming_classifies_v0_ops() {
@@ -152,8 +171,13 @@ mod tests {
         }
         let h = H;
         assert!(h.is_streaming(&RequestOp::Events { follow: true }));
-        assert!(h.is_streaming(&RequestOp::Trace { program_id: ProgramId::new() }));
-        assert!(h.is_streaming(&RequestOp::Logs { program_id: ProgramId::new(), follow: false }));
+        assert!(h.is_streaming(&RequestOp::Trace {
+            program_id: ProgramId::new()
+        }));
+        assert!(h.is_streaming(&RequestOp::Logs {
+            program_id: ProgramId::new(),
+            follow: false
+        }));
         assert!(!h.is_streaming(&RequestOp::Health));
         assert!(!h.is_streaming(&RequestOp::List { state: None }));
     }

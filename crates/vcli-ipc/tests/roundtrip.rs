@@ -5,11 +5,13 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
+use vcli_core::ProgramId;
 use vcli_ipc::handler::test_double::FakeHandler;
 use vcli_ipc::{IpcClient, IpcServer, RequestOp};
-use vcli_core::ProgramId;
 
-async fn start_server(tmp: &TempDir) -> (oneshot::Sender<()>, Arc<FakeHandler>, std::path::PathBuf) {
+async fn start_server(
+    tmp: &TempDir,
+) -> (oneshot::Sender<()>, Arc<FakeHandler>, std::path::PathBuf) {
     let path = tmp.path().join("vcli.sock");
     let handler = Arc::new(FakeHandler::default());
     let server = IpcServer::bind(&path, handler.clone()).unwrap();
@@ -47,14 +49,19 @@ async fn list_health_and_cancel_roundtrip() {
 
     let mut client = IpcClient::connect(&path).await.unwrap();
 
-    let list = client.request(RequestOp::List { state: None }).await.unwrap();
+    let list = client
+        .request(RequestOp::List { state: None })
+        .await
+        .unwrap();
     assert_eq!(serde_json::to_value(&list.body).unwrap()["ok"], true);
 
     let health = client.request(RequestOp::Health).await.unwrap();
     assert_eq!(serde_json::to_value(&health.body).unwrap()["ok"], true);
 
     let cancel = client
-        .request(RequestOp::Cancel { program_id: ProgramId::new() })
+        .request(RequestOp::Cancel {
+            program_id: ProgramId::new(),
+        })
         .await
         .unwrap();
     assert_eq!(serde_json::to_value(&cancel.body).unwrap()["ok"], true);

@@ -44,19 +44,37 @@ impl StreamFrame {
     /// Convenience: build an event frame.
     #[must_use]
     pub fn event(id: RequestId, event: Event) -> Self {
-        Self { id, stream: StreamKind::Events, end: false, event: Some(event), trace: None }
+        Self {
+            id,
+            stream: StreamKind::Events,
+            end: false,
+            event: Some(event),
+            trace: None,
+        }
     }
 
     /// Convenience: build a trace record frame.
     #[must_use]
     pub fn trace(id: RequestId, record: serde_json::Value) -> Self {
-        Self { id, stream: StreamKind::Trace, end: false, event: None, trace: Some(record) }
+        Self {
+            id,
+            stream: StreamKind::Trace,
+            end: false,
+            event: None,
+            trace: Some(record),
+        }
     }
 
     /// Terminal frame signalling end of stream.
     #[must_use]
     pub fn end_of_stream(id: RequestId, kind: StreamKind) -> Self {
-        Self { id, stream: kind, end: true, event: None, trace: None }
+        Self {
+            id,
+            stream: kind,
+            end: true,
+            event: None,
+            trace: None,
+        }
     }
 }
 
@@ -75,7 +93,9 @@ mod tests {
             rid(),
             Event {
                 at: 1,
-                data: EventData::DaemonStarted { version: "0.0.1".into() },
+                data: EventData::DaemonStarted {
+                    version: "0.0.1".into(),
+                },
             },
         );
         let j = serde_json::to_string(&f).unwrap();

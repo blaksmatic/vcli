@@ -78,9 +78,12 @@ mod tests {
 
     #[test]
     fn unexpected_eof_reports_progress() {
-        let e = IpcError::UnexpectedEof { got: 3, expected: 8 };
+        let e = IpcError::UnexpectedEof {
+            got: 3,
+            expected: 8,
+        };
         let s = e.to_string();
-        assert!(s.contains("3"));
-        assert!(s.contains("8"));
+        assert!(s.contains('3'));
+        assert!(s.contains('8'));
     }
 }

@@ -70,10 +70,10 @@ impl Serialize for ErrFlag {
 impl<'de> Deserialize<'de> for ErrFlag {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let b = bool::deserialize(d)?;
-        if !b {
-            Ok(Self)
-        } else {
+        if b {
             Err(serde::de::Error::custom("expected false"))
+        } else {
+            Ok(Self)
         }
     }
 }
@@ -82,13 +82,19 @@ impl Response {
     /// Build an `Ok` response.
     #[must_use]
     pub fn ok(id: RequestId, result: serde_json::Value) -> Self {
-        Self { id, body: ResponseBody::Ok { ok: OkFlag, result } }
+        Self {
+            id,
+            body: ResponseBody::Ok { ok: OkFlag, result },
+        }
     }
 
     /// Build an `Err` response.
     #[must_use]
     pub fn err(id: RequestId, error: ErrorPayload) -> Self {
-        Self { id, body: ResponseBody::Err { ok: ErrFlag, error } }
+        Self {
+            id,
+            body: ResponseBody::Err { ok: ErrFlag, error },
+        }
     }
 }
 

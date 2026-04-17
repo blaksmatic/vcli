@@ -9,7 +9,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::error::{IpcError, IpcResult};
+use crate::error::IpcResult;
 
 /// Resolved socket path plus the lookup strategy that found it (for diagnostics).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,34 +38,45 @@ pub enum SocketPathOrigin {
 /// Environment variable that, when set, overrides all other resolution.
 pub const OVERRIDE_ENV: &str = "VCLI_SOCKET";
 
-/// Resolve the default socket path. Returns `Err(IpcError::SocketPath)` if
-/// nothing in the fallback chain is usable.
+/// Resolve the default socket path.
+///
+/// # Errors
+/// Returns `Err(IpcError::SocketPath)` if nothing in the fallback chain is usable.
 pub fn default_socket_path() -> IpcResult<SocketPath> {
     if let Some(p) = env::var_os(OVERRIDE_ENV) {
-        return Ok(SocketPath { path: PathBuf::from(p), origin: SocketPathOrigin::Override });
+        return Ok(SocketPath {
+            path: PathBuf::from(p),
+            origin: SocketPathOrigin::Override,
+        });
     }
     #[cfg(target_os = "macos")]
     {
         if let Some(p) = try_mac_tmpdir() {
-            return Ok(SocketPath { path: p, origin: SocketPathOrigin::MacTmpdir });
+            return Ok(SocketPath {
+                path: p,
+                origin: SocketPathOrigin::MacTmpdir,
+            });
         }
     }
     #[cfg(target_os = "linux")]
     {
         if let Some(p) = try_xdg_runtime_dir() {
-            return Ok(SocketPath { path: p, origin: SocketPathOrigin::XdgRuntimeDir });
+            return Ok(SocketPath {
+                path: p,
+                origin: SocketPathOrigin::XdgRuntimeDir,
+            });
         }
         if let Some(p) = try_run_user() {
-            return Ok(SocketPath { path: p, origin: SocketPathOrigin::RunUser });
+            return Ok(SocketPath {
+                path: p,
+                origin: SocketPathOrigin::RunUser,
+            });
         }
     }
-    if let Some(p) = try_tmp_fallback() {
-        return Ok(SocketPath { path: p, origin: SocketPathOrigin::TmpFallback });
-    }
-    Err(IpcError::SocketPath(
-        "no usable socket directory (tried $VCLI_SOCKET, $TMPDIR, $XDG_RUNTIME_DIR, /run/user, /tmp)"
-            .into(),
-    ))
+    Ok(SocketPath {
+        path: try_tmp_fallback(),
+        origin: SocketPathOrigin::TmpFallback,
+    })
 }
 
 fn uid() -> u32 {
@@ -112,8 +123,8 @@ fn try_run_user() -> Option<PathBuf> {
     }
 }
 
-fn try_tmp_fallback() -> Option<PathBuf> {
-    Some(PathBuf::from(format!("/tmp/vcli-{}.sock", uid())))
+fn try_tmp_fallback() -> PathBuf {
+    PathBuf::from(format!("/tmp/vcli-{}.sock", uid()))
 }
 
 fn sock_in_dir(dir: &Path) -> Option<PathBuf> {
@@ -170,7 +181,10 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn mac_uses_tmpdir_branch() {
-        let _g = EnvGuard::set(&[(OVERRIDE_ENV, None), ("TMPDIR", Some("/private/var/folders/xx"))]);
+        let _g = EnvGuard::set(&[
+            (OVERRIDE_ENV, None),
+            ("TMPDIR", Some("/private/var/folders/xx")),
+        ]);
         let p = default_socket_path().unwrap();
         assert_eq!(p.origin, SocketPathOrigin::MacTmpdir);
         assert!(p.path.starts_with("/private/var/folders/xx"));
@@ -180,7 +194,7 @@ mod tests {
 
     #[test]
     fn tmp_fallback_produces_uid_scoped_name() {
-        let p = try_tmp_fallback().unwrap();
+        let p = try_tmp_fallback();
         let s = p.to_string_lossy();
         assert!(s.starts_with("/tmp/vcli-"));
         assert!(s.ends_with(".sock"));

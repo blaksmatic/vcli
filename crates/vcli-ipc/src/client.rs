@@ -79,7 +79,11 @@ impl IpcClient {
             writer.flush().await?;
             // writer (and write_half) are dropped here — we only need the read side now.
         }
-        Ok(ResponseStream { reader: BufReader::new(read_half), id, done: false })
+        Ok(ResponseStream {
+            reader: BufReader::new(read_half),
+            id,
+            done: false,
+        })
     }
 }
 
@@ -119,14 +123,15 @@ impl ResponseStream {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn connect_fails_without_server() {
-        let err = IpcClient::connect("/tmp/definitely-does-not-exist.sock").await.unwrap_err();
+        let err = IpcClient::connect("/tmp/definitely-does-not-exist.sock")
+            .await
+            .unwrap_err();
         assert!(matches!(err, IpcError::Io(_)));
     }
 }

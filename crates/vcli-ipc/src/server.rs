@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::{AsyncWrite};
+use tokio::io::AsyncWrite;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
@@ -26,7 +26,9 @@ pub struct IpcServer {
 
 impl std::fmt::Debug for IpcServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IpcServer").field("socket_path", &self.socket_path).finish_non_exhaustive()
+        f.debug_struct("IpcServer")
+            .field("socket_path", &self.socket_path)
+            .finish_non_exhaustive()
     }
 }
 
@@ -51,7 +53,11 @@ impl IpcServer {
             std::fs::set_permissions(&socket_path, perms)
                 .map_err(|e| IpcError::SocketSetup(format!("chmod 0600: {e}")))?;
         }
-        Ok(Self { listener, socket_path, handler })
+        Ok(Self {
+            listener,
+            socket_path,
+            handler,
+        })
     }
 
     /// The bound path, for display in `vcli health` and logs.
@@ -63,7 +69,13 @@ impl IpcServer {
     /// Run the accept loop until cancelled. Each accepted connection is
     /// spawned as an independent task; failures on one connection do not
     /// affect others. Returns `Ok(())` only if `shutdown_signal` completes.
-    pub async fn serve(self, mut shutdown_signal: tokio::sync::oneshot::Receiver<()>) -> IpcResult<()> {
+    ///
+    /// # Errors
+    /// Returns `IpcError::Io` if `accept()` fails with a non-recoverable error.
+    pub async fn serve(
+        self,
+        mut shutdown_signal: tokio::sync::oneshot::Receiver<()>,
+    ) -> IpcResult<()> {
         loop {
             tokio::select! {
                 biased;
@@ -104,8 +116,11 @@ pub(crate) async fn handle_connection(
     loop {
         let req: Request = match read_frame(&mut reader).await {
             Ok(r) => r,
-            Err(IpcError::UnexpectedEof { got: 0, expected: 4 }) => return Ok(()),
-            Err(e @ IpcError::InvalidJson(_)) | Err(e @ IpcError::FrameTooLarge { .. }) => {
+            Err(IpcError::UnexpectedEof {
+                got: 0,
+                expected: 4,
+            }) => return Ok(()),
+            Err(e @ (IpcError::InvalidJson(_) | IpcError::FrameTooLarge { .. })) => {
                 // Best-effort: try to report the error with a synthesized id.
                 let resp = Response::err(
                     crate::wire::request::RequestId::new(),
@@ -136,7 +151,10 @@ where
     let Request { id, op } = req;
     let resp = match handler.handle(id, op).await {
         Ok(r) => r,
-        Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+        Err(e) => Response::err(
+            id,
+            ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+        ),
     };
     write_frame(writer, &resp).await
 }
@@ -158,9 +176,8 @@ where
     let sender = StreamSender(tx);
     let op_for_task = op.clone();
     let handler_task = handler.clone();
-    let handler_fut = tokio::spawn(async move {
-        handler_task.handle_stream(id, op_for_task, sender).await
-    });
+    let handler_fut =
+        tokio::spawn(async move { handler_task.handle_stream(id, op_for_task, sender).await });
 
     while let Some(frame) = rx.recv().await {
         write_frame(writer, &frame).await?;
