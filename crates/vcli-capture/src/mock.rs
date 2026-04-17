@@ -16,14 +16,14 @@ impl Capture for MockCapture {
     }
 
     fn enumerate_windows(&self) -> Result<Vec<WindowDescriptor>, CaptureError> {
-        Ok(vec![])
+        Ok(Vec::new())
     }
 
     fn grab_screen(&mut self) -> Result<Frame, CaptureError> {
-        Err(CaptureError::Other("stub".into()))
+        Err(CaptureError::Backend { message: "stub".into() })
     }
 
     fn grab_window(&mut self, _window: &WindowDescriptor) -> Result<Frame, CaptureError> {
-        Err(CaptureError::Other("stub".into()))
+        Err(CaptureError::Backend { message: "stub".into() })
     }
 }

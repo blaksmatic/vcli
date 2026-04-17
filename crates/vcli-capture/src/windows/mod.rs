@@ -24,14 +24,14 @@ impl Capture for WindowsCapture {
     }
 
     fn enumerate_windows(&self) -> Result<Vec<WindowDescriptor>, CaptureError> {
-        Err(CaptureError::Other("stub".into()))
+        Err(CaptureError::Unsupported { what: "stub" })
     }
 
     fn grab_screen(&mut self) -> Result<Frame, CaptureError> {
-        Err(CaptureError::Other("stub".into()))
+        Err(CaptureError::Unsupported { what: "stub" })
     }
 
     fn grab_window(&mut self, _window: &WindowDescriptor) -> Result<Frame, CaptureError> {
-        Err(CaptureError::Other("stub".into()))
+        Err(CaptureError::Unsupported { what: "stub" })
     }
 }
