@@ -29,11 +29,21 @@ pub struct DragSegment {
 /// can hold one behind an `Arc`.
 pub trait InputSink: Send + Sync {
     /// Move the cursor to `to` immediately (no interpolation).
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::Halted` if the kill switch is engaged, or a
+    /// backend-specific error if the OS rejects the event.
     fn mouse_move(&self, to: Point) -> Result<(), InputError>;
 
     /// Click `button` at `at` with `modifiers` held. `hold_ms` is the down→up
     /// gap (0 = fire down+up back-to-back). Backends that cannot honor hold
     /// duration still must return `Ok(())` only after the up event posts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::Halted` if the kill switch is engaged, or a
+    /// backend-specific error if the OS rejects the event.
     fn click(
         &self,
         at: Point,
@@ -45,26 +55,44 @@ pub trait InputSink: Send + Sync {
     /// Double-click `button` at `at`. Implementations set the
     /// `MouseEventClickState` field to 2 on the second press so the OS treats
     /// it as a double-click (not two single clicks).
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::Halted` if the kill switch is engaged, or a
+    /// backend-specific error if the OS rejects the event.
     fn double_click(&self, at: Point, button: Button) -> Result<(), InputError>;
 
     /// Drag from `from` through each `DragSegment.to` in order. `button` is
     /// held down across all segments and released at the final `to`. Returns
     /// only after the final mouse-up is posted.
-    fn drag(
-        &self,
-        from: Point,
-        segments: &[DragSegment],
-        button: Button,
-    ) -> Result<(), InputError>;
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::InvalidArgument` if `segments` is empty,
+    /// `InputError::Halted` if the kill switch fires mid-drag, or a backend
+    /// error if the OS rejects any event.
+    fn drag(&self, from: Point, segments: &[DragSegment], button: Button)
+        -> Result<(), InputError>;
 
     /// Type literal UTF-8 text. Backends use Unicode key events (macOS:
     /// `CGEventKeyboardSetUnicodeString`) so the active keyboard layout is
     /// respected and arbitrary code-points (including non-ASCII) type correctly.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::Halted` if the kill switch is engaged, or a
+    /// backend-specific error if the OS rejects any key event.
     fn type_text(&self, text: &str) -> Result<(), InputError>;
 
     /// Press a key combo. `key` uses the vcli canonical key-name set
     /// (e.g. `"s"`, `"return"`, `"space"`, `"f1"`); see [`crate::keymap`].
     /// Down/up pairs are emitted for each modifier around the primary key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InputError::UnknownKey` if `key` is not in the canonical set,
+    /// `InputError::Halted` if the kill switch is engaged, or a backend error
+    /// if the OS rejects the event.
     fn key_combo(&self, modifiers: &[Modifier], key: &str) -> Result<(), InputError>;
 }
 

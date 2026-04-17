@@ -1,4 +1,4 @@
-//! Errors surfaced by [`InputSink`] implementations.
+//! Errors surfaced by [`crate::sink::InputSink`] implementations.
 
 use thiserror::Error;
 use vcli_core::ErrorCode;

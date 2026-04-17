@@ -117,9 +117,7 @@ fn key_combo_records_modifiers() {
 #[test]
 fn empty_drag_is_rejected() {
     let m = new_mock();
-    let e = m
-        .drag(Point { x: 0, y: 0 }, &[], Button::Left)
-        .unwrap_err();
+    let e = m.drag(Point { x: 0, y: 0 }, &[], Button::Left).unwrap_err();
     assert!(matches!(e, InputError::InvalidArgument(_)));
 }
 

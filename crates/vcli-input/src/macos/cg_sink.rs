@@ -1,5 +1,5 @@
 //! Real macOS `InputSink`. Enforces the [`KillSwitch`] on every entry point,
-//! then delegates to the low-level CGEvent helpers.
+//! then delegates to the low-level `CGEvent` helpers.
 
 #![cfg(target_os = "macos")]
 
@@ -71,7 +71,13 @@ impl InputSink for CGEventInputSink {
     ) -> Result<(), InputError> {
         self.guard()?;
         cg_events::post_move(at)?;
-        cg_events::post_click(at, button, modifiers, Duration::from_millis(hold_ms.into()), 1)
+        cg_events::post_click(
+            at,
+            button,
+            modifiers,
+            Duration::from_millis(hold_ms.into()),
+            1,
+        )
     }
 
     fn double_click(&self, at: Point, button: Button) -> Result<(), InputError> {
@@ -124,7 +130,8 @@ impl InputSink for CGEventInputSink {
             }
             let dx = seg.to.x - current.x;
             let dy = seg.to.y - current.y;
-            let dist = ((dx * dx + dy * dy) as f64).sqrt() as i32;
+            #[allow(clippy::cast_possible_truncation)]
+            let dist = f64::from(dx * dx + dy * dy).sqrt() as i32;
             let steps = (dist / DRAG_STEP_PX).max(1);
             let sleep_each = seg.duration / u32::try_from(steps).unwrap_or(1);
             for i in 1..=steps {

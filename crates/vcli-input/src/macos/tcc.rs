@@ -13,9 +13,8 @@ use crate::permissions::{PermissionReport, PermissionStatus};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrustedWithOptions(
-        options: core_foundation::dictionary::CFDictionaryRef,
-    ) -> bool;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
+        -> bool;
 }
 
 #[link(name = "IOKit", kind = "framework")]

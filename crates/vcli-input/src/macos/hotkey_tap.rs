@@ -3,7 +3,7 @@
 //! Spawns a dedicated thread with its own `CFRunLoop`. Installs an event tap at
 //! `kCGHIDEventTap` in `kCGEventTapOptionListenOnly` mode so it observes — but
 //! never consumes — keystrokes. When the `Cmd+Shift+Esc` chord is detected
-//! (keycode `0x35` with Cmd + Shift flags on KeyDown), it calls
+//! (keycode `0x35` with Cmd + Shift flags on `KeyDown`), it calls
 //! `KillSwitch::engage()`. Dropping the returned `KillSwitchListenerHandle`
 //! stops the run loop and joins the thread.
 //!
@@ -19,14 +19,14 @@ use std::thread::JoinHandle;
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
-    CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventTapProxy, CGEventType,
 };
 
 use crate::error::InputError;
 use crate::kill_switch::KillSwitch;
 
-/// `kVK_Escape` from HIToolbox/Events.h — numeric discriminant in the CGEventType repr.
+/// `kVK_Escape` from HIToolbox/Events.h — numeric discriminant in the `CGEventType` repr.
 const KVK_ESCAPE_KEYCODE: i64 = 0x35;
 /// `CGEventType::KeyDown` discriminant value.
 const CG_EVENT_KEY_DOWN: u32 = CGEventType::KeyDown as u32;
@@ -51,6 +51,16 @@ impl Drop for KillSwitchListenerHandle {
 /// Start the listener. Returns a handle — dropping the handle stops the thread.
 ///
 /// Fails if the current process doesn't hold Input Monitoring permission.
+///
+/// # Errors
+///
+/// Returns `InputError::Backend` if the background thread cannot be spawned.
+///
+/// # Panics
+///
+/// Panics if `CFMachPortCreateRunLoopSource` returns `None` after a successful
+/// `CGEventTap::new` — this would indicate a system-level invariant violation
+/// and is not recoverable.
 pub fn spawn_kill_switch_listener(
     kill: KillSwitch,
 ) -> Result<KillSwitchListenerHandle, InputError> {
@@ -79,8 +89,8 @@ pub fn spawn_kill_switch_listener(
                                 core_graphics::event::EventField::KEYBOARD_EVENT_KEYCODE,
                             );
                             let flags = event.get_flags();
-                            let want = CGEventFlags::CGEventFlagCommand
-                                | CGEventFlags::CGEventFlagShift;
+                            let want =
+                                CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift;
                             if keycode == KVK_ESCAPE_KEYCODE && flags.contains(want) {
                                 kill.engage();
                             }
@@ -91,12 +101,9 @@ pub fn spawn_kill_switch_listener(
                 },
             );
 
-            let tap = match tap_result {
-                Ok(t) => t,
-                Err(()) => {
-                    // Input Monitoring not granted — exit thread cleanly.
-                    return;
-                }
+            let Ok(tap) = tap_result else {
+                // Input Monitoring not granted — exit thread cleanly.
+                return;
             };
 
             let runloop = CFRunLoop::get_current();

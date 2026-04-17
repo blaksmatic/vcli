@@ -28,12 +28,9 @@ impl KillSwitch {
     pub fn engage(&self) {
         let now_ns = duration_since_boot_ns();
         // CAS so we don't overwrite the original engagement timestamp on re-engage.
-        let _ = self.engaged_at_ns.compare_exchange(
-            0,
-            now_ns,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        let _ = self
+            .engaged_at_ns
+            .compare_exchange(0, now_ns, Ordering::SeqCst, Ordering::SeqCst);
         self.engaged.store(true, Ordering::SeqCst);
     }
 
@@ -69,6 +66,7 @@ pub struct KillSwitchObserver {
 impl KillSwitchObserver {
     /// Return immediately if engaged; otherwise poll every `poll` until
     /// `timeout` elapses. Returns whether the switch became engaged.
+    #[must_use]
     pub fn wait_until_engaged(&self, timeout: Duration, poll: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
@@ -88,8 +86,9 @@ fn duration_since_boot_ns() -> u64 {
     use std::time::SystemTime;
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0))
-        .unwrap_or(0)
+        .map_or(0, |d| {
+            u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0)
+        })
 }
 
 #[cfg(test)]

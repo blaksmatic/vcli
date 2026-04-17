@@ -34,7 +34,7 @@ pub enum MockCall {
         /// Held button.
         button: Button,
     },
-    /// A click variant that carries modifiers + hold (InputAction::Click drops them).
+    /// A click variant that carries modifiers + hold (`InputAction::Click` drops them).
     ClickDetailed {
         /// Point.
         at: Point,
@@ -75,12 +75,20 @@ impl MockInputSink {
     }
 
     /// Read the current call log.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned (should not happen in normal use).
     #[must_use]
     pub fn calls(&self) -> Vec<MockCall> {
         self.log.lock().unwrap().clone()
     }
 
     /// Drain and return calls (clears the log).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned (should not happen in normal use).
     pub fn drain(&self) -> Vec<MockCall> {
         std::mem::take(&mut *self.log.lock().unwrap())
     }
@@ -92,6 +100,10 @@ impl MockInputSink {
     }
 
     /// Force every subsequent call to fail with `InputError::Backend { detail }`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned (should not happen in normal use).
     pub fn fail_with(&self, detail: impl Into<String>) {
         *self.forced_error.lock().unwrap() = Some(detail.into());
     }
@@ -254,9 +266,7 @@ mod tests {
     #[test]
     fn mock_rejects_empty_drag() {
         let m = MockInputSink::new();
-        let e = m
-            .drag(Point { x: 0, y: 0 }, &[], Button::Left)
-            .unwrap_err();
+        let e = m.drag(Point { x: 0, y: 0 }, &[], Button::Left).unwrap_err();
         matches!(e, InputError::InvalidArgument(_));
     }
 

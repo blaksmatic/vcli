@@ -1,6 +1,6 @@
 //! vcli-input — input synthesis for vcli.
 //!
-//! Exposes a synchronous [`InputSink`] trait with a macOS CGEvent backend, a
+//! Exposes a synchronous [`InputSink`] trait with a macOS `CGEvent` backend, a
 //! recording [`MockInputSink`] used by downstream crates in tests, and a
 //! process-global [`KillSwitch`] (Codex Decision B) that short-circuits every
 //! method when a human has signalled STOP via the OS-level chord.

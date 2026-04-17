@@ -52,7 +52,16 @@ pub enum NamedKey {
     Function(u8),
 }
 
-/// Parse a canonical name. Returns `UnknownKey` on anything we don't recognize.
+/// Parse a canonical name.
+///
+/// # Errors
+///
+/// Returns `InputError::UnknownKey` on anything not in the canonical vocabulary.
+///
+/// # Panics
+///
+/// Does not panic in practice: the single-char branch only calls `unwrap()`
+/// after confirming `.chars().count() == 1`.
 pub fn parse(name: &str) -> Result<CanonicalKey, InputError> {
     let n = name.trim().to_ascii_lowercase();
     if n.is_empty() {
@@ -94,7 +103,7 @@ pub fn parse(name: &str) -> Result<CanonicalKey, InputError> {
 
 /// Translate a parsed key into a macOS virtual keycode (from
 /// `HIToolbox/Events.h` / `kVK_*`). Returns `None` for code-points that can't
-/// be typed via a virtual key (fallback path: type_text via Unicode events).
+/// be typed via a virtual key (fallback path: `type_text` via Unicode events).
 #[cfg(target_os = "macos")]
 #[must_use]
 pub fn macos_keycode(key: CanonicalKey) -> Option<u16> {
@@ -203,10 +212,19 @@ mod tests {
 
     #[test]
     fn named_keys_parse() {
-        assert_eq!(parse("return").unwrap(), CanonicalKey::Named(NamedKey::Return));
-        assert_eq!(parse("Enter").unwrap(), CanonicalKey::Named(NamedKey::Return));
+        assert_eq!(
+            parse("return").unwrap(),
+            CanonicalKey::Named(NamedKey::Return)
+        );
+        assert_eq!(
+            parse("Enter").unwrap(),
+            CanonicalKey::Named(NamedKey::Return)
+        );
         assert_eq!(parse("esc").unwrap(), CanonicalKey::Named(NamedKey::Escape));
-        assert_eq!(parse("page_up").unwrap(), CanonicalKey::Named(NamedKey::PageUp));
+        assert_eq!(
+            parse("page_up").unwrap(),
+            CanonicalKey::Named(NamedKey::PageUp)
+        );
     }
 
     #[test]
