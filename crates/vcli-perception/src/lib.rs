@@ -38,4 +38,8 @@ pub mod elapsed;
 
 pub use elapsed::ElapsedMsSinceTrueEvaluator;
 
+pub mod template;
+
+pub use template::TemplateEvaluator;
+
 pub mod perception;
