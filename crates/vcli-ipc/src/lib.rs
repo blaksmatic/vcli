@@ -21,3 +21,9 @@ pub use socket_path::{default_socket_path, SocketPath};
 pub mod frame;
 
 pub use frame::{read_frame, write_frame, MAX_FRAME_LEN};
+
+pub mod wire;
+
+pub use wire::{
+    Request, RequestId, RequestOp, Response, ResponseBody, StreamFrame, StreamKind,
+};
