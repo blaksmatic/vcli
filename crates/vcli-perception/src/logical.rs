@@ -7,8 +7,6 @@
 //! a malformed program (which the DSL validator should have caught at
 //! submit) can't crash the daemon.
 
-use std::collections::BTreeMap;
-
 use vcli_core::predicate::PredicateKind;
 use vcli_core::{predicate_hash, Predicate, PredicateHash, PredicateResult};
 
@@ -170,6 +168,7 @@ pub(crate) use evaluate_named_with_depth as crate_evaluate_named_with_depth;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use vcli_core::geom::{Point, Rect};

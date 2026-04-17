@@ -12,7 +12,7 @@ use image::{imageops, GrayImage};
 use serde_json::json;
 
 use vcli_core::predicate::PredicateKind;
-use vcli_core::{canonicalize, Frame, Predicate, PredicateResult};
+use vcli_core::{canonicalize, Predicate, PredicateResult};
 
 use crate::error::{PerceptionError, Result};
 use crate::evaluator::{EvalCtx, Evaluator};
@@ -144,7 +144,7 @@ mod tests {
     use image::{Rgb, RgbImage};
     use vcli_core::geom::Rect;
     use vcli_core::predicate::PredicateKind;
-    use vcli_core::{FrameFormat, Region};
+    use vcli_core::{Frame, FrameFormat, Region};
 
     use crate::cache::PredicateCache;
     use crate::state::PerceptionState;
