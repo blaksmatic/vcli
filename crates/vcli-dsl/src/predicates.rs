@@ -72,12 +72,11 @@ fn check_predicate_references(
     Ok(())
 }
 
-fn check_region_references(
-    region: &Region,
-    names: &[&str],
-    at: &JsonPath,
-) -> Result<(), DslError> {
-    if let Region::RelativeTo { predicate, anchor, .. } = region {
+fn check_region_references(region: &Region, names: &[&str], at: &JsonPath) -> Result<(), DslError> {
+    if let Region::RelativeTo {
+        predicate, anchor, ..
+    } = region
+    {
         let _ = Anchor::Match; // compile-time proof we know Anchor's shape
         let _ = anchor;
         resolve_name(predicate, names, &at.key("predicate"))?;
@@ -86,7 +85,7 @@ fn check_region_references(
 }
 
 fn resolve_name(name: &str, names: &[&str], at: &JsonPath) -> Result<(), DslError> {
-    if names.iter().any(|n| *n == name) {
+    if names.contains(&name) {
         return Ok(());
     }
     let hint = did_you_mean(name, names.iter().copied());
@@ -100,7 +99,7 @@ fn resolve_name(name: &str, names: &[&str], at: &JsonPath) -> Result<(), DslErro
 }
 
 fn resolve_elapsed(name: &str, names: &[&str], at: &JsonPath) -> Result<(), DslError> {
-    if names.iter().any(|n| *n == name) {
+    if names.contains(&name) {
         return Ok(());
     }
     Err(DslError::new(
@@ -111,6 +110,14 @@ fn resolve_elapsed(name: &str, names: &[&str], at: &JsonPath) -> Result<(), DslE
     ))
 }
 
+// Iterative DFS: WHITE unvisited, GRAY in-stack, BLACK done.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Color {
+    White,
+    Gray,
+    Black,
+}
+
 /// Full validation of the predicate map: shape + cycle detection over the
 /// merged dependency graph (Decision 1.3). Edges come from `all_of`/`any_of`/
 /// `not`, `elapsed_ms_since_true.predicate`, and `region: relative_to.predicate`.
@@ -119,18 +126,17 @@ fn resolve_elapsed(name: &str, names: &[&str], at: &JsonPath) -> Result<(), DslE
 ///
 /// Returns [`DslError::kind = PredicateCycle`] on any cycle, or any shape /
 /// reference error from [`validate_predicate_shape`].
+///
+/// # Panics
+///
+/// Will not panic in practice: the `stack.pop().unwrap()` inside the DFS loop
+/// is guarded by the `stack.last_mut()` check on the same iteration, so the
+/// stack is guaranteed non-empty at that point.
 pub fn validate_predicate_graph(
     predicates: &BTreeMap<String, PredicateKind>,
 ) -> Result<(), DslError> {
     validate_predicate_shape(predicates)?;
 
-    // Iterative DFS: WHITE unvisited, GRAY in-stack, BLACK done.
-    #[derive(Copy, Clone, PartialEq, Eq)]
-    enum Color {
-        White,
-        Gray,
-        Black,
-    }
     let mut color: BTreeMap<&str, Color> = predicates
         .keys()
         .map(|k| (k.as_str(), Color::White))
@@ -274,7 +280,10 @@ mod tests {
             "c": {"kind":"elapsed_ms_since_true","predicate":"nope","ms":100}
         }));
         let e = validate_predicate_shape(&p).unwrap_err();
-        assert!(matches!(e.kind, DslErrorKind::ElapsedReferenceMissing { .. }));
+        assert!(matches!(
+            e.kind,
+            DslErrorKind::ElapsedReferenceMissing { .. }
+        ));
         assert_eq!(e.path.to_string(), "/predicates/c/predicate");
     }
 

@@ -3,7 +3,7 @@
 //! Grammar (v0):
 //!   Expression := '$' Name '.' 'match' '.' Accessor
 //!   Name       := [A-Za-z_][A-Za-z0-9_]*
-//!   Accessor   := 'center' | 'top_left' | 'box' | 'confidence'
+//!   Accessor   := 'center' | '`top_left`' | 'box' | 'confidence'
 //!
 //! Parser errors carry a static reason string; callers attach a `JsonPath`
 //! for context.
@@ -40,9 +40,9 @@ impl Expression {
     ///
     /// Returns [`DslError`] with kind [`DslErrorKind::MalformedExpression`].
     pub fn parse(src: &str, at: &JsonPath) -> Result<Self, DslError> {
-        let rest = src.strip_prefix('$').ok_or_else(|| {
-            err("expression must begin with '$'", src, at)
-        })?;
+        let rest = src
+            .strip_prefix('$')
+            .ok_or_else(|| err("expression must begin with '$'", src, at))?;
         let mut parts = rest.split('.');
         let name = parts
             .next()
@@ -55,11 +55,15 @@ impl Expression {
                 at,
             ));
         }
-        let match_kw = parts.next().ok_or_else(|| err("missing '.match'", src, at))?;
+        let match_kw = parts
+            .next()
+            .ok_or_else(|| err("missing '.match'", src, at))?;
         if match_kw != "match" {
             return Err(err("expected '.match' after predicate name", src, at));
         }
-        let acc = parts.next().ok_or_else(|| err("missing accessor", src, at))?;
+        let acc = parts
+            .next()
+            .ok_or_else(|| err("missing accessor", src, at))?;
         if parts.next().is_some() {
             return Err(err("trailing segments after accessor", src, at));
         }
@@ -116,7 +120,10 @@ mod tests {
         assert_eq!(p("$x.match.center").unwrap().accessor, Accessor::Center);
         assert_eq!(p("$x.match.top_left").unwrap().accessor, Accessor::TopLeft);
         assert_eq!(p("$x.match.box").unwrap().accessor, Accessor::Box);
-        assert_eq!(p("$x.match.confidence").unwrap().accessor, Accessor::Confidence);
+        assert_eq!(
+            p("$x.match.confidence").unwrap().accessor,
+            Accessor::Confidence
+        );
     }
 
     #[test]

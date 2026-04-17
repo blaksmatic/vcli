@@ -523,6 +523,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vcli-dsl"
+version = "0.0.1"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "vcli-core",
+]
+
+[[package]]
 name = "wait-timeout"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

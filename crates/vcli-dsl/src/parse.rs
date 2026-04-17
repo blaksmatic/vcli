@@ -73,12 +73,8 @@ pub fn parse_envelope_value(v: &Value) -> Result<Program, DslError> {
     }
 
     // Now let serde do the heavy lifting.
-    serde_json::from_value::<Program>(v.clone()).map_err(|e| {
-        DslError::new(
-            DslErrorKind::JsonParse(e.to_string()),
-            JsonPath::root(),
-        )
-    })
+    serde_json::from_value::<Program>(v.clone())
+        .map_err(|e| DslError::new(DslErrorKind::JsonParse(e.to_string()), JsonPath::root()))
 }
 
 fn type_name(v: &Value) -> &'static str {
@@ -125,7 +121,11 @@ mod tests {
         let src = r#"{ "version": 1 }"#;
         let e = parse_envelope_str(src).unwrap_err();
         match e.kind {
-            DslErrorKind::WrongType { field, expected, got } => {
+            DslErrorKind::WrongType {
+                field,
+                expected,
+                got,
+            } => {
                 assert_eq!(field, "version");
                 assert_eq!(expected, "string");
                 assert_eq!(got, "number");
@@ -140,7 +140,10 @@ mod tests {
         let src = r#"{ "version": "1.0", "name": "x", "trigger": {"kind":"on_submit"} }"#;
         let e = parse_envelope_str(src).unwrap_err();
         match e.kind {
-            DslErrorKind::UnsupportedDslVersion { found, expected_major } => {
+            DslErrorKind::UnsupportedDslVersion {
+                found,
+                expected_major,
+            } => {
                 assert_eq!(found, "1.0");
                 assert_eq!(expected_major, "0");
             }

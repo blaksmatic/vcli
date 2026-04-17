@@ -107,7 +107,7 @@ fn validate_target(
             match predicates.get(&expr.name) {
                 None => {
                     let names: Vec<&str> = predicates.keys().map(String::as_str).collect();
-                    let hint = did_you_mean(&expr.name, names.into_iter());
+                    let hint = did_you_mean(&expr.name, names);
                     Err(DslError::new(
                         DslErrorKind::UnknownPredicateName {
                             name: expr.name,
@@ -116,10 +116,12 @@ fn validate_target(
                         at.clone(),
                     ))
                 }
-                Some(PredicateKind::AllOf { .. })
-                | Some(PredicateKind::AnyOf { .. })
-                | Some(PredicateKind::Not { .. })
-                | Some(PredicateKind::ElapsedMsSinceTrue { .. }) => Err(DslError::new(
+                Some(
+                    PredicateKind::AllOf { .. }
+                    | PredicateKind::AnyOf { .. }
+                    | PredicateKind::Not { .. }
+                    | PredicateKind::ElapsedMsSinceTrue { .. },
+                ) => Err(DslError::new(
                     DslErrorKind::ExpressionOnLogicalPredicate { name: expr.name },
                     at.clone(),
                 )),
@@ -138,7 +140,7 @@ fn resolve_step_name(
         return Ok(());
     }
     let names: Vec<&str> = predicates.keys().map(String::as_str).collect();
-    let hint = did_you_mean(name, names.into_iter());
+    let hint = did_you_mean(name, names);
     Err(DslError::new(
         DslErrorKind::UnknownPredicateName {
             name: name.to_string(),
@@ -209,7 +211,10 @@ mod tests {
             {"kind":"click","at":"$logic.match.center"}
         ]));
         let e = validate_body_steps(&s, &p, &JsonPath::root().key("body")).unwrap_err();
-        assert!(matches!(e.kind, DslErrorKind::ExpressionOnLogicalPredicate { .. }));
+        assert!(matches!(
+            e.kind,
+            DslErrorKind::ExpressionOnLogicalPredicate { .. }
+        ));
     }
 
     #[test]

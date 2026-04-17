@@ -150,7 +150,10 @@ mod lib_tests {
         })
         .to_string();
         let e = validate_str(&src).unwrap_err();
-        assert!(matches!(e.kind, error::DslErrorKind::UnknownTriggerName { .. }));
+        assert!(matches!(
+            e.kind,
+            error::DslErrorKind::UnknownTriggerName { .. }
+        ));
     }
 
     #[test]

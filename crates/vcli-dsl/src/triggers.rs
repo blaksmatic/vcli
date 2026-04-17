@@ -22,7 +22,7 @@ pub fn validate_trigger(
     if let Trigger::OnPredicate { name } = trigger {
         if !predicates.contains_key(name) {
             let names: Vec<&str> = predicates.keys().map(String::as_str).collect();
-            let hint = did_you_mean(name, names.into_iter());
+            let hint = did_you_mean(name, names);
             return Err(DslError::new(
                 DslErrorKind::UnknownTriggerName {
                     name: name.clone(),

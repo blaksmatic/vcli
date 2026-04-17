@@ -1,5 +1,5 @@
 //! Per-predicate hash computation. For each named predicate, canonicalize its
-//! serde_json representation (via `vcli_core::canonicalize`) and hash it
+//! `serde_json` representation (via `vcli_core::canonicalize`) and hash it
 //! (`predicate_hash`). Output is keyed by predicate name for easy cache-key
 //! lookup downstream.
 //!

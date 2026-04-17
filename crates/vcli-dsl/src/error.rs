@@ -64,7 +64,7 @@ impl From<CanonicalError> for DslError {
 /// Machine-readable error kinds. Every variant must render a useful `Display`.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum DslErrorKind {
-    /// JSON failed to parse at all (serde_json error message).
+    /// JSON failed to parse at all (`serde_json` error message).
     #[error("json parse failed: {0}")]
     JsonParse(String),
 
@@ -102,7 +102,7 @@ pub enum DslErrorKind {
     },
 
     /// `watch.when` referenced a missing name (separate variant so callers can
-    /// distinguish surface; implementation shares with UnknownPredicateName).
+    /// distinguish surface; implementation shares with `UnknownPredicateName`).
     #[error("unknown predicate referenced in watch.when: {name:?}")]
     UnknownWatchName {
         /// The name that wasn't found.
@@ -143,7 +143,7 @@ pub enum DslErrorKind {
         y: i32,
     },
 
-    /// Step that's forbidden inside a watch (wait_for / assert / sleep_ms).
+    /// Step that's forbidden inside a watch (`wait_for` / `assert` / `sleep_ms`).
     #[error("step kind {kind:?} is not allowed inside watch.do (body-only)")]
     BodyOnlyStepInWatch {
         /// Kind that was found.
@@ -160,7 +160,9 @@ pub enum DslErrorKind {
     },
 
     /// Expression references a non-match-producing predicate (e.g. logical).
-    #[error("expression references non-match predicate {name:?} (logical predicates produce no match)")]
+    #[error(
+        "expression references non-match predicate {name:?} (logical predicates produce no match)"
+    )]
     ExpressionOnLogicalPredicate {
         /// Name referenced.
         name: String,
@@ -169,7 +171,7 @@ pub enum DslErrorKind {
     /// `all_of.of` / `any_of.of` empty — vacuously true/false and probably a bug.
     #[error("{op} requires at least one operand")]
     EmptyLogicalOp {
-        /// Which op: "all_of" | "any_of".
+        /// Which op: `"all_of"` | `"any_of"`.
         op: &'static str,
     },
 
@@ -215,10 +217,7 @@ mod tests {
 
     #[test]
     fn hint_absent_for_non_name_errors() {
-        let e = DslError::new(
-            DslErrorKind::MissingField("version"),
-            JsonPath::root(),
-        );
+        let e = DslError::new(DslErrorKind::MissingField("version"), JsonPath::root());
         assert_eq!(e.hint(), None);
     }
 
@@ -231,7 +230,7 @@ mod tests {
             },
             JsonPath::root().key("predicates").key("bar").key("of"),
         );
-        let j = serde_json::to_value(&e.to_payload()).unwrap();
+        let j = serde_json::to_value(e.to_payload()).unwrap();
         assert_eq!(j["code"], json!("invalid_program"));
         assert_eq!(j["path"], json!("/predicates/bar/of"));
     }

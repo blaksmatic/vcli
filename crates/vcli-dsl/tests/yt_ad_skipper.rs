@@ -22,10 +22,7 @@ fn yt_ad_skipper_validates_successfully() {
         other => panic!("expected ByName: {other:?}"),
     }
     assert!(program.body.is_empty());
-    assert_eq!(
-        program.on_complete.as_ref().unwrap().emit,
-        "ad_skipped"
-    );
+    assert_eq!(program.on_complete.as_ref().unwrap().emit, "ad_skipped");
 
     assert_eq!(hashes.len(), 1);
     let h = &hashes["skip_visible"];
