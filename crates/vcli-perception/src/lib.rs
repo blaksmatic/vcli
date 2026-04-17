@@ -29,3 +29,9 @@ pub use color_at::ColorAtEvaluator;
 pub mod pixel_diff;
 
 pub use pixel_diff::PixelDiffEvaluator;
+
+pub mod logical;
+
+pub use logical::{AllOfEvaluator, AnyOfEvaluator, NotEvaluator};
+
+pub mod perception;
