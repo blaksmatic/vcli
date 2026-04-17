@@ -1,0 +1,24 @@
+[package]
+name = "vcli-input"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Input synthesis trait, macOS CGEvent backend, mock, and HIL kill switch for vcli."
+
+[dependencies]
+vcli-core = { path = "../vcli-core" }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { workspace = true }
+core-foundation = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }

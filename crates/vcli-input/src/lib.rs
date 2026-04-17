@@ -1,0 +1,45 @@
+//! vcli-input — input synthesis for vcli.
+//!
+//! Exposes a synchronous [`InputSink`] trait with a macOS `CGEvent` backend, a
+//! recording [`MockInputSink`] used by downstream crates in tests, and a
+//! process-global [`KillSwitch`] (Codex Decision B) that short-circuits every
+//! method when a human has signalled STOP via the OS-level chord.
+//!
+//! Windows is a stub (`unimplemented!()`). See the v0 spec §Input synthesis
+//! and §Action confirmation for the contract this crate implements.
+
+#![deny(unsafe_code)] // relaxed inside macos/ submodules via module-level #![allow(unsafe_code)]
+#![deny(rust_2018_idioms)]
+#![warn(missing_docs)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+
+pub mod error;
+
+pub use error::InputError;
+
+pub mod kill_switch;
+
+pub use kill_switch::{KillSwitch, KillSwitchObserver};
+
+pub mod sink;
+
+pub use sink::{DragSegment, InputSink};
+
+pub mod mock;
+
+pub use mock::MockInputSink;
+
+pub mod keymap;
+
+pub use keymap::{macos_keycode, CanonicalKey};
+
+pub mod permissions;
+
+pub use permissions::{PermissionReport, PermissionStatus};
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
