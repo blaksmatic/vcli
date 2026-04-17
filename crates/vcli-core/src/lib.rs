@@ -34,3 +34,7 @@ pub use predicate::{MatchData, Predicate, PredicateKind, PredicateResult};
 pub mod action;
 
 pub use action::{Button, InputAction, Modifier};
+
+pub mod step;
+
+pub use step::{OnFail, OnTimeout, Step, Target};
