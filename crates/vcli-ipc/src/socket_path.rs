@@ -182,13 +182,13 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn mac_uses_tmpdir_branch() {
-        let _g = EnvGuard::set(&[
-            (OVERRIDE_ENV, None),
-            ("TMPDIR", Some("/private/var/folders/xx")),
-        ]);
+        // Use a real existing directory for TMPDIR so that other tests
+        // running in parallel (which call TempDir::new() under the temporarily
+        // modified TMPDIR) don't fail with ENOENT.
+        let _g = EnvGuard::set(&[(OVERRIDE_ENV, None), ("TMPDIR", Some("/tmp"))]);
         let p = default_socket_path().unwrap();
         assert_eq!(p.origin, SocketPathOrigin::MacTmpdir);
-        assert!(p.path.starts_with("/private/var/folders/xx"));
+        assert!(p.path.starts_with("/tmp"));
         assert!(p.path.to_string_lossy().contains("vcli-"));
         assert!(p.path.extension().unwrap() == "sock");
     }
