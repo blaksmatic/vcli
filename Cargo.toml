@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vcli-core",
+    "crates/vcli-capture",
     "crates/vcli-dsl",
     "crates/vcli-input",
     "crates/vcli-ipc",
@@ -35,10 +36,13 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
 
-# Platform-specific (used by vcli-input + vcli-capture later)
+tracing = "0.1"
+
+# Platform-specific (used by vcli-input + vcli-capture)
 core-graphics = { version = "0.24", features = ["highsierra"] }
 core-foundation = "0.10"
 libc = "0.2"
+screencapturekit = "1"
 
 # Added by vcli-perception lane
 dashmap = "6"
