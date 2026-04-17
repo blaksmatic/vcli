@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/vcli-core",
     "crates/vcli-dsl",
+    "crates/vcli-store",
 ]
 
 [workspace.package]
@@ -24,3 +25,8 @@ unicode-normalization = "0.1"
 
 # Dev-only
 proptest = "1"
+tempfile = "3"
+
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
