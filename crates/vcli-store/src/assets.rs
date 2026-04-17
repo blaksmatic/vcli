@@ -66,7 +66,11 @@ impl Store {
     /// Pass `None` for ext-less blobs.
     ///
     /// # Errors
-    /// Surfaces SQLite + IO errors.
+    /// Surfaces `SQLite` + IO errors.
+    ///
+    /// # Panics
+    /// Panics if the computed blob path has no parent directory (should never happen
+    /// because `asset_blob_path` always produces a path at least 3 levels deep).
     pub fn put_asset(
         &mut self,
         bytes: &[u8],
@@ -135,7 +139,7 @@ impl Store {
     /// Link a program to an asset in `program_assets` (idempotent).
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
     pub fn link_program_asset(
         &mut self,
         program_id: ProgramId,
@@ -152,7 +156,7 @@ impl Store {
     /// Return the set of asset hashes referenced by any program row.
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
     pub fn referenced_asset_hashes(&self) -> StoreResult<Vec<AssetHash>> {
         let mut stmt = self
             .conn()
@@ -185,7 +189,9 @@ fn atomic_write(path: &PathBuf, bytes: &[u8]) -> StoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::NewProgram;
     use tempfile::tempdir;
+    use vcli_core::state::ProgramState;
 
     #[test]
     fn put_then_get_roundtrips_bytes() {
@@ -228,8 +234,6 @@ mod tests {
     fn link_program_asset_and_list() {
         let d = tempdir().unwrap();
         let (mut s, _) = Store::open(d.path()).unwrap();
-        use crate::store::NewProgram;
-        use vcli_core::state::ProgramState;
         let pid = ProgramId::new();
         s.insert_program(&NewProgram {
             id: pid,

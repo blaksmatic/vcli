@@ -8,7 +8,7 @@ use thiserror::Error;
 /// Error surface for every fallible `Store` operation.
 #[derive(Debug, Error)]
 pub enum StoreError {
-    /// SQLite returned an error.
+    /// `SQLite` returned an error.
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
@@ -37,7 +37,7 @@ pub enum StoreError {
         reason: String,
     },
 
-    /// Program was not failed(daemon_restart) or is otherwise not resumable.
+    /// Program was not `failed(daemon_restart)` or is otherwise not resumable.
     #[error("not resumable: {0}")]
     NotResumable(String),
 
@@ -84,8 +84,11 @@ mod tests {
 
     #[test]
     fn schema_newer_display() {
-        let e = StoreError::SchemaNewer { found: 5, supported: 3 };
-        assert!(e.to_string().contains("5"));
-        assert!(e.to_string().contains("3"));
+        let e = StoreError::SchemaNewer {
+            found: 5,
+            supported: 3,
+        };
+        assert!(e.to_string().contains('5'));
+        assert!(e.to_string().contains('3'));
     }
 }

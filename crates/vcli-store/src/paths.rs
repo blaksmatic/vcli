@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Absolute path to the SQLite database under `data_root`.
+/// Absolute path to the `SQLite` database under `data_root`.
 #[must_use]
 pub fn db_path(data_root: &Path) -> PathBuf {
     data_root.join("vcli.db")
@@ -27,6 +27,9 @@ pub fn assets_root(data_root: &Path) -> PathBuf {
 /// first two hex chars and `yy` the next two.
 ///
 /// `extension` must NOT include the leading dot.
+///
+/// # Panics
+/// Panics if `hex_hash` is shorter than 4 characters (required for two-level sharding).
 #[must_use]
 pub fn asset_blob_path(data_root: &Path, hex_hash: &str, extension: Option<&str>) -> PathBuf {
     assert!(

@@ -27,7 +27,8 @@ fn seven_day_retention_boundary() {
             labels_json: "{}",
         })
         .unwrap();
-        s.update_state(id, ProgramState::Completed, finished).unwrap();
+        s.update_state(id, ProgramState::Completed, finished)
+            .unwrap();
     }
 
     let n = s.gc_programs(cutoff).unwrap();

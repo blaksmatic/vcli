@@ -27,7 +27,7 @@ impl Store {
     /// program (FK enforced).
     ///
     /// # Errors
-    /// Surfaces SQLite + serde errors.
+    /// Surfaces `SQLite` + serde errors.
     pub fn append_event(&mut self, program_id: ProgramId, ev: &Event) -> StoreResult<i64> {
         let type_tag = event_type_tag(&ev.data).to_string();
         let data_json = serde_json::to_string(ev)?;
@@ -43,7 +43,11 @@ impl Store {
     /// Pass `since = 0` to read everything. `limit` caps the returned rows.
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
+    ///
+    /// # Panics
+    /// Panics if a stored program id is not a valid UUID (should never happen for
+    /// data written by this crate).
     pub fn stream_events(&self, since: i64, limit: u32) -> StoreResult<Vec<StoredEvent>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, program_id, type, data_json, at
@@ -52,7 +56,7 @@ impl Store {
              ORDER BY id ASC
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(rusqlite::params![since, limit as i64], |r| {
+        let rows = stmt.query_map(rusqlite::params![since, i64::from(limit)], |r| {
             let id: i64 = r.get(0)?;
             let pid_s: String = r.get(1)?;
             let type_tag: String = r.get(2)?;
@@ -117,7 +121,10 @@ mod tests {
         let id = seed(&mut s);
         let ev = Event {
             at: 10,
-            data: EventData::ProgramCompleted { program_id: id, emit: None },
+            data: EventData::ProgramCompleted {
+                program_id: id,
+                emit: None,
+            },
         };
         let a = s.append_event(id, &ev).unwrap();
         let b = s.append_event(id, &ev).unwrap();
@@ -161,7 +168,10 @@ mod tests {
                 id,
                 &Event {
                     at: 0,
-                    data: EventData::ProgramCompleted { program_id: id, emit: None },
+                    data: EventData::ProgramCompleted {
+                        program_id: id,
+                        emit: None,
+                    },
                 },
             )
             .unwrap();
@@ -179,7 +189,10 @@ mod tests {
             id,
             &Event {
                 at: 0,
-                data: EventData::ProgramCompleted { program_id: id, emit: None },
+                data: EventData::ProgramCompleted {
+                    program_id: id,
+                    emit: None,
+                },
             },
         )
         .unwrap();

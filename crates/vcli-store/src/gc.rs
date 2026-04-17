@@ -15,7 +15,7 @@ pub const RETENTION_DAYS: u32 = 7;
 /// What a GC pass did. All counts are 0-safe.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GcReport {
-    /// Number of `programs` rows deleted (with events/program_assets/traces
+    /// Number of `programs` rows deleted (with `events/program_assets/traces`
     /// cascading).
     pub programs_deleted: u32,
     /// Number of `assets` rows deleted.
@@ -28,11 +28,11 @@ pub struct GcReport {
 
 impl Store {
     /// Delete terminal-state programs whose `finished_at` is older than
-    /// `older_than_unix_ms`. FK cascades clean up events, program_assets,
+    /// `older_than_unix_ms`. FK cascades clean up events, `program_assets`,
     /// traces.
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
     pub fn gc_programs(&mut self, older_than_unix_ms: i64) -> StoreResult<u32> {
         let n = self.conn_mut().execute(
             "DELETE FROM programs
@@ -49,7 +49,7 @@ impl Store {
     /// tick loop (spec: "Never blocks the tick loop").
     ///
     /// # Errors
-    /// Surfaces SQLite + IO errors.
+    /// Surfaces `SQLite` + IO errors.
     pub fn gc_assets(&mut self) -> StoreResult<(u32, u32)> {
         // 1. Find unreferenced hashes.
         let unreferenced: Vec<(String, Option<String>)> = {
@@ -97,11 +97,12 @@ impl Store {
     /// run was >7 days ago" behavior; also useful post-crash.
     ///
     /// # Errors
-    /// Surfaces IO errors.
+    /// Surfaces `SQLite` + IO errors.
     pub fn gc_orphan_blobs(&self) -> StoreResult<u32> {
         let known: HashSet<String> = {
             let mut stmt = self.conn().prepare("SELECT hash FROM assets")?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<Result<HashSet<_>, _>>()?;
             rows
         };
@@ -126,7 +127,7 @@ impl Store {
     /// Full GC sweep. Convenience for `vcli gc` and startup.
     ///
     /// # Errors
-    /// Surfaces SQLite + IO errors.
+    /// Surfaces `SQLite` + IO errors.
     pub fn gc_all(&mut self, older_than_unix_ms: i64) -> StoreResult<GcReport> {
         let programs_deleted = self.gc_programs(older_than_unix_ms)?;
         let (assets_deleted, blobs_deleted) = self.gc_assets()?;
@@ -147,7 +148,8 @@ impl Store {
     pub fn list_orphan_blob_names(&self) -> StoreResult<Vec<String>> {
         let known: HashSet<String> = {
             let mut stmt = self.conn().prepare("SELECT hash FROM assets")?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<Result<HashSet<_>, _>>()?;
             rows
         };
@@ -198,6 +200,7 @@ fn walk_files(
 mod tests {
     use super::*;
     use crate::store::NewProgram;
+    use std::fs;
     use tempfile::tempdir;
     use vcli_core::ids::ProgramId;
     use vcli_core::state::ProgramState;
@@ -213,7 +216,8 @@ mod tests {
             labels_json: "{}",
         })
         .unwrap();
-        s.update_state(id, ProgramState::Completed, finished_at).unwrap();
+        s.update_state(id, ProgramState::Completed, finished_at)
+            .unwrap();
         id
     }
 
@@ -289,7 +293,6 @@ mod tests {
         let d = tempdir().unwrap();
         let (s, _) = Store::open(d.path()).unwrap();
         // Drop a file manually into the assets dir.
-        use std::fs;
         let orphan = asset_blob_path(
             d.path(),
             "ab12deadbeefbabecafefeedface0000000000000000000000000000000000aa",

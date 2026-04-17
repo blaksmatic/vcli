@@ -63,7 +63,7 @@ impl Store {
     /// flush (spec: "at task boundaries or on shutdown").
     ///
     /// # Errors
-    /// Surfaces SQLite + serde errors.
+    /// Surfaces `SQLite` + serde errors.
     pub fn flush_traces(&mut self, records: &[TraceRecord]) -> StoreResult<()> {
         if records.is_empty() {
             return Ok(());
@@ -93,7 +93,7 @@ impl Store {
     /// in-memory ring). Ordered by id ascending.
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
     pub fn read_traces(&self, program_id: ProgramId) -> StoreResult<Vec<TraceRecord>> {
         let mut stmt = self.conn().prepare(
             "SELECT tick, at, program_id, kind, payload_json
@@ -110,7 +110,6 @@ impl Store {
                 at,
                 program_id: pid_s.and_then(|s| s.parse().ok()),
                 kind: match kind_s.as_str() {
-                    "predicate_eval" => TraceKind::PredicateEval,
                     "state_change" => TraceKind::StateChange,
                     "action_dispatched" => TraceKind::ActionDispatched,
                     "action_deferred" => TraceKind::ActionDeferred,
@@ -160,7 +159,7 @@ mod tests {
             kind: TraceKind::StateChange,
             payload: serde_json::json!({"from":"waiting","to":"running"}),
         };
-        s.flush_traces(&[rec.clone()]).unwrap();
+        s.flush_traces(std::slice::from_ref(&rec)).unwrap();
         let back = s.read_traces(id).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].tick, 7);

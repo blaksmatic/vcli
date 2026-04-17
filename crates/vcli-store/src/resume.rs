@@ -43,15 +43,17 @@ impl Store {
                 other => StoreError::Sqlite(other),
             })?;
 
-        if state != ProgramState::Failed.as_str()
-            || code.as_deref() != Some("daemon_restart")
-        {
+        if state != ProgramState::Failed.as_str() || code.as_deref() != Some("daemon_restart") {
             return Err(StoreError::NotResumable(format!(
                 "program {id} state={state} code={code:?}"
             )));
         }
 
-        let new_cursor = if from_start { 0 } else { u32::try_from(cursor).unwrap_or(0) };
+        let new_cursor = if from_start {
+            0
+        } else {
+            u32::try_from(cursor).unwrap_or(0)
+        };
 
         tx.execute(
             "UPDATE programs
@@ -73,7 +75,9 @@ impl Store {
             rusqlite::params![now_ms, id.to_string()],
         )?;
         tx.commit()?;
-        Ok(ResumeOutcome { from_step: new_cursor })
+        Ok(ResumeOutcome {
+            from_step: new_cursor,
+        })
     }
 }
 
@@ -142,7 +146,8 @@ mod tests {
         })
         .unwrap();
         s.update_state(id, ProgramState::Failed, 10).unwrap();
-        s.set_last_error(id, "wait_for_timeout", "timed out").unwrap();
+        s.set_last_error(id, "wait_for_timeout", "timed out")
+            .unwrap();
         let err = s.resume_program(id, false, 11).unwrap_err();
         assert!(matches!(err, StoreError::NotResumable(_)));
     }

@@ -1,4 +1,4 @@
-//! SQLite PRAGMAs applied to every `Store` connection per Decision 4.4:
+//! `SQLite` PRAGMAs applied to every `Store` connection per Decision 4.4:
 //! WAL mode, NORMAL sync, 5s busy timeout, 32MB cache, FKs on, MEMORY temp store.
 
 use rusqlite::Connection;
@@ -6,7 +6,10 @@ use rusqlite::Connection;
 use crate::error::StoreResult;
 
 /// Apply all PRAGMAs mandated by Decision 4.4. Order matters: `journal_mode`
-/// before `synchronous` is the documented SQLite pattern.
+/// before `synchronous` is the documented `SQLite` pattern.
+///
+/// # Errors
+/// Surfaces `SQLite` errors.
 pub fn apply_pragmas(conn: &Connection) -> StoreResult<()> {
     // journal_mode returns the new mode as a row; use query_row.
     let mode: String = conn.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))?;

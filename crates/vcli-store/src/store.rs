@@ -1,6 +1,6 @@
-//! `Store` — the top-level handle owning the SQLite connection.
+//! `Store` — the top-level handle owning the `SQLite` connection.
 //!
-//! Opening performs: mkdir data_root + assets_root, connect + apply PRAGMAs,
+//! Opening performs: mkdir `data_root` + `assets_root`, connect + apply PRAGMAs,
 //! run migrations, and perform restart recovery (any row in state `running`
 //! transitions to `failed(daemon_restart)`, preserving `body_cursor`).
 //! See spec §Restart semantics, step 4.
@@ -28,7 +28,7 @@ pub struct RecoveredProgram {
     pub body_cursor: u32,
 }
 
-/// Handle to the on-disk store. Single-writer at a time; SQLite WAL mode
+/// Handle to the on-disk store. Single-writer at a time; `SQLite` WAL mode
 /// supports concurrent readers (see `wal_concurrent.rs` integration test).
 pub struct Store {
     data_root: PathBuf,
@@ -39,7 +39,7 @@ impl Store {
     /// Open (or create) the store rooted at `data_root`.
     ///
     /// # Errors
-    /// Surfaces IO, SQLite, and migration failures.
+    /// Surfaces IO, `SQLite`, and migration failures.
     pub fn open(data_root: impl AsRef<Path>) -> StoreResult<(Self, Vec<RecoveredProgram>)> {
         let data_root = data_root.as_ref().to_path_buf();
 
@@ -107,6 +107,10 @@ impl Store {
     ///
     /// # Errors
     /// `StoreError::UnknownProgram` if the id is not in the table.
+    ///
+    /// # Panics
+    /// Panics if a stored id or state is not a valid value (should never happen
+    /// for data written by this crate).
     pub fn get_program(&self, id: ProgramId) -> StoreResult<ProgramRow> {
         self.conn
             .query_row(
@@ -120,14 +124,17 @@ impl Store {
                         id: r.get::<_, String>(0)?.parse().unwrap(),
                         name: r.get(1)?,
                         source_json: r.get(2)?,
-                        state: r.get::<_, String>(3)?.parse().unwrap_or(ProgramState::Pending),
+                        state: r
+                            .get::<_, String>(3)?
+                            .parse()
+                            .unwrap_or(ProgramState::Pending),
                         submitted_at: r.get(4)?,
                         started_at: r.get(5)?,
                         finished_at: r.get(6)?,
                         last_error_code: r.get(7)?,
                         last_error_msg: r.get(8)?,
                         labels_json: r.get(9)?,
-                        body_cursor: r.get::<_, i64>(10)? as u32,
+                        body_cursor: u32::try_from(r.get::<_, i64>(10)?).unwrap_or(0),
                         body_entered_at: r.get(11)?,
                     })
                 },
@@ -171,7 +178,7 @@ impl Store {
     pub fn set_body_cursor(&mut self, id: ProgramId, cursor: u32) -> StoreResult<()> {
         let n = self.conn.execute(
             "UPDATE programs SET body_cursor = ?1 WHERE id = ?2",
-            rusqlite::params![cursor as i64, id.to_string()],
+            rusqlite::params![i64::from(cursor), id.to_string()],
         )?;
         if n == 0 {
             return Err(StoreError::UnknownProgram(id.to_string()));
@@ -182,7 +189,7 @@ impl Store {
     /// Record the last error (code + message) for a program, without changing state.
     ///
     /// # Errors
-    /// Surfaces SQLite errors.
+    /// Surfaces `SQLite` errors.
     pub fn set_last_error(&mut self, id: ProgramId, code: &str, msg: &str) -> StoreResult<()> {
         self.conn.execute(
             "UPDATE programs SET last_error_code = ?1, last_error_msg = ?2 WHERE id = ?3",
@@ -198,7 +205,7 @@ pub struct NewProgram<'a> {
     pub id: ProgramId,
     /// Program name.
     pub name: &'a str,
-    /// Canonical-form source JSON (see vcli_core::canonicalize).
+    /// Canonical-form source JSON (see `vcli_core::canonicalize`).
     pub source_json: &'a str,
     /// Initial state (normally `ProgramState::Pending`).
     pub state: ProgramState,
@@ -241,9 +248,8 @@ fn recover_running_programs(conn: &mut Connection) -> StoreResult<Vec<RecoveredP
     let tx = conn.transaction()?;
     let mut recovered = Vec::new();
     {
-        let mut stmt = tx.prepare(
-            "SELECT id, body_cursor FROM programs WHERE state = 'running'",
-        )?;
+        let mut stmt =
+            tx.prepare("SELECT id, body_cursor FROM programs WHERE state = 'running'")?;
         let rows = stmt.query_map([], |r| {
             let id_str: String = r.get(0)?;
             let cursor: i64 = r.get(1)?;

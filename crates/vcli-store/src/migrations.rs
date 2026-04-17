@@ -2,7 +2,7 @@
 //! exactly once, in order, inside a single transaction. `schema_version`
 //! holds the highest applied version.
 //!
-//! Authoritative schema source: spec §Persistence → SQLite schema (v0).
+//! Authoritative schema source: spec §Persistence → `SQLite` schema (v0).
 //! Spec notes the `programs` / `program_assets` / `events` / `schema_version`
 //! tables. We extend v0 with `traces` (opt-in flush-on-shutdown ring) and
 //! an `assets` index so `put_asset`/`get_asset` have a queryable hash table.
@@ -18,7 +18,7 @@ pub const LATEST_SCHEMA_VERSION: u32 = 1;
 /// (empty or at `i`) TO version `i+1`. First element (index 0) is the bootstrap.
 const MIGRATIONS: &[&str] = &[
     // ---- version 1: v0 bootstrap ------------------------------------------
-    r#"
+    r"
     CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER NOT NULL
     );
@@ -74,11 +74,14 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS traces_program_idx ON traces(program_id);
     CREATE INDEX IF NOT EXISTS traces_at_idx      ON traces(at);
-    "#,
+    ",
 ];
 
 /// Read current version from `schema_version`. Returns `0` if table is empty
 /// or missing.
+///
+/// # Errors
+/// Surfaces `SQLite` errors.
 pub fn current_version(conn: &Connection) -> StoreResult<u32> {
     // Create table lazily so this works on a brand-new db without panic.
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")?;
@@ -90,6 +93,10 @@ pub fn current_version(conn: &Connection) -> StoreResult<u32> {
 
 /// Run every pending migration. Idempotent — re-running on an up-to-date db
 /// is a no-op. Errors if the db is ahead of this binary.
+///
+/// # Errors
+/// `StoreError::SchemaNewer` if the db version exceeds the latest supported version.
+/// Surfaces `SQLite` errors on any other failure.
 pub fn run_migrations(conn: &mut Connection) -> StoreResult<()> {
     let cur = current_version(conn)?;
     if u32::try_from(MIGRATIONS.len()).unwrap_or(0) < cur {
@@ -151,7 +158,14 @@ mod tests {
     fn all_v0_tables_exist_after_migration() {
         let mut conn = memory();
         run_migrations(&mut conn).unwrap();
-        for table in ["programs", "program_assets", "events", "assets", "traces", "schema_version"] {
+        for table in [
+            "programs",
+            "program_assets",
+            "events",
+            "assets",
+            "traces",
+            "schema_version",
+        ] {
             let n: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
