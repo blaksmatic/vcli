@@ -1,0 +1,24 @@
+{
+  "version": "0.1",
+  "name": "yt-ad-skipper",
+  "trigger": { "kind": "on_submit" },
+  "predicates": {
+    "skip_visible": {
+      "kind": "template",
+      "image": "assets/yt_skip.png",
+      "confidence": 0.9,
+      "region": { "kind": "window", "app": "Safari", "title_contains": "YouTube" },
+      "throttle_ms": 200
+    }
+  },
+  "watches": [
+    {
+      "when": "skip_visible",
+      "do": [{ "kind": "click", "at": "$skip_visible.match.center" }],
+      "throttle_ms": 500,
+      "lifetime": { "kind": "persistent" }
+    }
+  ],
+  "body": [],
+  "on_complete": { "emit": "ad_skipped" }
+}

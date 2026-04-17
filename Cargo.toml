@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vcli-core",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+version = "0.0.1"
+license = "MIT"
+repository = "https://github.com/blaksmatic/vcli"
+authors = ["blaksmatic"]
+
+[workspace.dependencies]
+# Shared across all crates that will exist. Only vcli-core uses these in this plan.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+ryu = "1"
+unicode-normalization = "0.1"
+
+# Dev-only
+proptest = "1"

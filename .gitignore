@@ -1,0 +1,13 @@
+/target
+Cargo.lock.orig
+**/*.rs.bk
+.DS_Store
+*.swp
+# IDE
+.idea/
+.vscode/
+# Daemon test data
+/tmp-data/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
