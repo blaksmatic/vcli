@@ -42,3 +42,7 @@ pub use step::{OnFail, OnTimeout, Step, Target};
 pub mod watch;
 
 pub use watch::{Lifetime, Watch, WatchWhen};
+
+pub mod trigger;
+
+pub use trigger::Trigger;
