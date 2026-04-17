@@ -26,3 +26,7 @@ pub use clock::{Clock, SystemClock, TestClock, UnixMs};
 pub mod region;
 
 pub use region::{Anchor, Region, WindowIndex};
+
+pub mod predicate;
+
+pub use predicate::{MatchData, Predicate, PredicateKind, PredicateResult};
