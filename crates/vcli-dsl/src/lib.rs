@@ -26,3 +26,6 @@ pub mod parse;
 pub(crate) mod hint;
 
 pub mod predicates;
+
+pub mod expression;
+pub use expression::{Accessor, Expression};
