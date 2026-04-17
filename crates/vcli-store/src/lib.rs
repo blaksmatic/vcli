@@ -16,10 +16,12 @@ pub mod paths;
 pub mod pragmas;
 pub mod resume;
 pub mod store;
+pub mod traces;
 
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use events::StoredEvent;
 pub use resume::ResumeOutcome;
+pub use traces::{TraceKind, TraceRecord};
 pub use store::{NewProgram, ProgramRow, RecoveredProgram, Store};
 
 pub use error::{StoreError, StoreResult};
