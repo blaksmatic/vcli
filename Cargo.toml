@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vcli-core",
+    "crates/vcli-perception",
 ]
 
 [workspace.package]
@@ -21,5 +22,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 ryu = "1"
 unicode-normalization = "0.1"
 
+dashmap = "6"
+imageproc = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Dev-only
 proptest = "1"
+approx = "0.5"
