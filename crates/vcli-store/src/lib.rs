@@ -11,6 +11,7 @@
 
 pub mod error;
 pub mod paths;
+pub mod pragmas;
 
 pub use error::{StoreError, StoreResult};
 pub use paths::{asset_blob_path, assets_root, db_path};
