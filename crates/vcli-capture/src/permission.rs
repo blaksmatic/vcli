@@ -1,5 +1,4 @@
 //! Screen Recording (TCC) permission probe.
-#![allow(unsafe_code)] // Required for CGPreflightScreenCaptureAccess / CGRequestScreenCaptureAccess extern "C" links on macOS.
 //!
 //! On macOS this calls `CGPreflightScreenCaptureAccess` and
 //! `CGRequestScreenCaptureAccess` from the Core Graphics framework directly
@@ -10,6 +9,7 @@
 //! "0.3" which does not exist on crates.io) does not expose a
 //! `util::has_permission` helper. We link the Core Graphics symbols directly
 //! instead, which is the idiomatic macOS approach.
+#![allow(unsafe_code)] // Required for CGPreflightScreenCaptureAccess / CGRequestScreenCaptureAccess extern "C" links on macOS.
 
 use crate::error::CaptureError;
 
@@ -39,29 +39,30 @@ pub enum PermissionStatus {
 /// in a way that is not "permission denied" (very rare — e.g., window server
 /// unreachable).
 pub fn check_screen_recording_permission() -> Result<PermissionStatus, CaptureError> {
-    #[cfg(target_os = "macos")]
-    {
-        // CGPreflightScreenCaptureAccess is a Core Graphics function available
-        // since macOS 10.15. It returns true if permission is granted, false
-        // otherwise, without prompting the user.
-        extern "C" {
-            fn CGPreflightScreenCaptureAccess() -> bool;
-        }
-        // SAFETY: CGPreflightScreenCaptureAccess is a stable macOS framework
-        // symbol with no preconditions beyond the process having a window
-        // server connection. It is safe to call from any thread.
-        let granted = unsafe { CGPreflightScreenCaptureAccess() };
-        return Ok(if granted {
-            PermissionStatus::Granted
-        } else {
-            PermissionStatus::Denied
-        });
-    }
+    cfg_if_macos()
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(PermissionStatus::Granted)
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
+fn cfg_if_macos() -> Result<PermissionStatus, CaptureError> {
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
     }
+    // SAFETY: CGPreflightScreenCaptureAccess is a stable macOS framework
+    // symbol with no preconditions beyond the process having a window
+    // server connection. It is safe to call from any thread.
+    let granted = unsafe { CGPreflightScreenCaptureAccess() };
+    Ok(if granted {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
+fn cfg_if_macos() -> Result<PermissionStatus, CaptureError> {
+    Ok(PermissionStatus::Granted)
 }
 
 /// Request the user grant screen-recording permission. Triggers the macOS
@@ -71,22 +72,26 @@ pub fn check_screen_recording_permission() -> Result<PermissionStatus, CaptureEr
 ///
 /// Returns [`CaptureError::Backend`] if the request call fails.
 pub fn request_screen_recording_permission() -> Result<(), CaptureError> {
-    #[cfg(target_os = "macos")]
-    {
-        extern "C" {
-            fn CGRequestScreenCaptureAccess() -> bool;
-        }
-        // SAFETY: CGRequestScreenCaptureAccess is a stable macOS framework
-        // symbol. We ignore the return value — the prompt is async from the
-        // user's perspective; the caller should re-probe after user action.
-        let _ = unsafe { CGRequestScreenCaptureAccess() };
-        return Ok(());
-    }
+    do_request()
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(())
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
+fn do_request() -> Result<(), CaptureError> {
+    extern "C" {
+        fn CGRequestScreenCaptureAccess() -> bool;
     }
+    // SAFETY: CGRequestScreenCaptureAccess is a stable macOS framework
+    // symbol. We ignore the return value — the prompt is async from the
+    // user's perspective; the caller should re-probe after user action.
+    let _granted = unsafe { CGRequestScreenCaptureAccess() };
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
+fn do_request() -> Result<(), CaptureError> {
+    Ok(())
 }
 
 #[cfg(test)]

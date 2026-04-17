@@ -67,22 +67,33 @@ mod tests {
         assert_eq!(e.to_string(), "screen recording permission not granted");
         let e = CaptureError::WindowNotFound { id: 77 };
         assert_eq!(e.to_string(), "window not found: id=77");
-        let e = CaptureError::MalformedFrame { reason: "bad stride".into() };
+        let e = CaptureError::MalformedFrame {
+            reason: "bad stride".into(),
+        };
         assert!(e.to_string().contains("bad stride"));
     }
 
     #[test]
     fn codes_are_stable() {
         assert_eq!(CaptureError::PermissionDenied.code(), "permission_denied");
-        assert_eq!(CaptureError::WindowNotFound { id: 1 }.code(), "unknown_window");
         assert_eq!(
-            CaptureError::Backend { message: "x".into() }.code(),
+            CaptureError::WindowNotFound { id: 1 }.code(),
+            "unknown_window"
+        );
+        assert_eq!(
+            CaptureError::Backend {
+                message: "x".into()
+            }
+            .code(),
             "capture_failed"
         );
         assert_eq!(
             CaptureError::MalformedFrame { reason: "x".into() }.code(),
             "capture_failed"
         );
-        assert_eq!(CaptureError::Unsupported { what: "x" }.code(), "unsupported");
+        assert_eq!(
+            CaptureError::Unsupported { what: "x" }.code(),
+            "unsupported"
+        );
     }
 }

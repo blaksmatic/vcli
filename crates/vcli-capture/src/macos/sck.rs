@@ -1,6 +1,6 @@
-//! macOS ScreenCaptureKit backend. Synchronous facade over the
+//! macOS `ScreenCaptureKit` backend. Synchronous facade over the
 //! `screencapturekit` crate (v1.5.4 on crates.io; plan cited "0.3" which does
-//! not exist). SCShareableContent::get() is a blocking synchronous call; no
+//! not exist). `SCShareableContent::get()` is a blocking synchronous call; no
 //! tokio runtime is needed.
 //!
 //! ## API wiring notes (v1.5.4 vs plan assumptions)
@@ -10,19 +10,18 @@
 //! | `screencapturekit::util::has_permission()` | Does not exist; see `permission.rs` for CG extern |
 //! | `SCContentFilter::new_with_display_excluding_windows` | `SCContentFilter::create().with_display(d).with_excluding_windows(&[]).build()` |
 //! | `SCContentFilter::new_with_desktop_independent_window` | `SCContentFilter::create().with_window(w).build()` |
-//! | `SCStreamConfiguration::new()` + setters returning `Result` | Builder pattern: `.with_width()`, `.with_height()`, `.with_pixel_format()` (infallible) |
+//! | `SCStreamConfiguration::new()` + setters returning `Result` | Builder pattern (infallible) |
 //! | `SCScreenshotManager::capture_image_with_filter` | `SCScreenshotManager::capture_image(&filter, &config)` |
-//! | `image.bgra_bytes()` | `image.rgba_data()` → RGBA Vec<u8> (we store as Rgba8 frame) |
+//! | `image.bgra_bytes()` | `image.rgba_data()` → RGBA `Vec<u8>` (stored as `Rgba8` frame) |
 //! | `image.bytes_per_row()` | Not available; computed as `width * 4` |
-//! | `display.scale_factor()` | Not available; scale is always 1.0 (SCK gives logical px) |
+//! | `display.scale_factor()` | Not available; scale is always 1.0 (`SCK` gives logical px) |
 //! | `CGRect.origin.x`, `.size.width` | `CGRect.x`, `.width` (flat struct) |
 //! | `window.owning_application()?.application_name().ok()` | `.application_name()` returns `String` directly |
 //!
 //! Coordinate model (Decision F1, 4.3):
-//!   SCK reports `CGRect` in logical points. We treat logical points == logical
+//!   `SCK` reports `CGRect` in logical points. We treat logical points == logical
 //!   pixels for v0 (macOS). Physical pixel downsample happens in `convert.rs`
 //!   using the display's scale factor.
-
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,7 +44,7 @@ use crate::error::CaptureError;
 use crate::macos::convert::{bgra_to_frame, RawBgra};
 use crate::permission::{check_screen_recording_permission, PermissionStatus};
 
-/// macOS SCK-backed `Capture` implementation.
+/// macOS `SCK`-backed `Capture` implementation.
 pub struct MacCapture {
     /// Cached `SCShareableContent` refreshed per-call. Behind a `Mutex`
     /// because SCK types are `!Sync` on some versions.
@@ -138,6 +137,7 @@ fn build_descriptors(windows: Vec<SCWindow>) -> Vec<WindowDescriptor> {
                 .unwrap_or_default();
             let title = w.title().unwrap_or_default();
             let rect = w.frame();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let bounds = Rect {
                 x: rect.x as i32,
                 y: rect.y as i32,
@@ -153,16 +153,31 @@ fn build_descriptors(windows: Vec<SCWindow>) -> Vec<WindowDescriptor> {
 /// Return current monotonic-ish timestamp in nanoseconds.
 fn monotonic_ns() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
+    // The cast from u128 to u64 is intentional: we only need nanoseconds since
+    // the Unix epoch modulo 2^64, which won't wrap for ~584 years from 1970.
+    #[allow(clippy::cast_possible_truncation)]
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
+/// Map a `screencapturekit` error to a `CaptureError`.
+fn map_sck_error(e: &screencapturekit::error::SCError, context: &str) -> CaptureError {
+    use screencapturekit::error::SCError;
+    match e {
+        SCError::PermissionDenied(_) | SCError::NoShareableContent(_) => {
+            CaptureError::PermissionDenied
+        }
+        _ => CaptureError::Backend {
+            message: format!("{context}: {e}"),
+        },
+    }
 }
 
 impl Capture for MacCapture {
     fn supported_formats(&self) -> &[FrameFormat] {
-        // ScreenCaptureKit v1.5.4 capture_image returns RGBA data.
-        // We store it as Rgba8.
+        // `ScreenCaptureKit` v1.5.4 `capture_image` returns RGBA data.
+        // We store it as `Rgba8`.
         const FORMATS: &[FrameFormat] = &[FrameFormat::Rgba8];
         FORMATS
     }
@@ -171,7 +186,7 @@ impl Capture for MacCapture {
         let content = self.refresh_content()?;
         let mut windows = content.windows();
         // Stable ordering: sort by window_id ascending (AX order ≈ creation time).
-        windows.sort_by_key(|w| w.window_id());
+        windows.sort_by_key(SCWindow::window_id);
         Ok(build_descriptors(windows))
     }
 
@@ -189,29 +204,23 @@ impl Capture for MacCapture {
             .with_excluding_windows(&[])
             .build();
 
-        let image =
-            SCScreenshotManager::capture_image(&filter, &cfg).map_err(|e| match &e {
-                screencapturekit::error::SCError::PermissionDenied(_) => {
-                    CaptureError::PermissionDenied
-                }
-                screencapturekit::error::SCError::NoShareableContent(_) => {
-                    CaptureError::PermissionDenied
-                }
-                _ => CaptureError::Backend {
-                    message: format!("SCScreenshotManager::capture_image: {e}"),
-                },
-            })?;
+        let image = SCScreenshotManager::capture_image(&filter, &cfg)
+            .map_err(|e| map_sck_error(&e, "SCScreenshotManager::capture_image"))?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let width_px = image.width() as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let height_px = image.height() as u32;
-        // rgba_data() returns raw RGBA bytes; stride = width * 4.
-        let pixels = image.rgba_data().map_err(|e| CaptureError::MalformedFrame {
-            reason: format!("CGImage::rgba_data: {e}"),
-        })?;
+        // `rgba_data()` returns raw RGBA bytes; stride = width * 4.
+        let pixels = image
+            .rgba_data()
+            .map_err(|e| CaptureError::MalformedFrame {
+                reason: format!("CGImage::rgba_data: {e}"),
+            })?;
         let stride = (width_px as usize) * 4;
 
-        // SCDisplay.width()/height() report logical pixels; scale = 1.0.
-        // CGDisplayScaleFactor was removed from macOS 26 SDK.
+        // `SCDisplay.width()`/`height()` report logical pixels; scale = 1.0.
+        // `CGDisplayScaleFactor` was removed from macOS 26 SDK.
         let raw = RawBgra {
             width_px,
             height_px,
@@ -223,8 +232,8 @@ impl Capture for MacCapture {
             logical_origin_y: 0,
         };
 
-        // bgra_to_frame produces FrameFormat::Bgra8, but since rgba_data
-        // gives us RGBA bytes, we override the format to Rgba8.
+        // `bgra_to_frame` produces `FrameFormat::Bgra8`, but since `rgba_data`
+        // gives us RGBA bytes, we override the format to `Rgba8`.
         let mut frame = bgra_to_frame(raw)?;
         frame.format = FrameFormat::Rgba8;
         Ok(frame)
@@ -233,7 +242,13 @@ impl Capture for MacCapture {
     fn grab_window(&mut self, window: &WindowDescriptor) -> Result<Frame, CaptureError> {
         let sck_window = self.locate_window(window.id)?;
         let frame_rect = sck_window.frame();
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let width_px = frame_rect.width as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let height_px = frame_rect.height as u32;
 
         let cfg = SCStreamConfiguration::new()
@@ -243,27 +258,22 @@ impl Capture for MacCapture {
 
         let filter = SCContentFilter::create().with_window(&sck_window).build();
 
-        let image =
-            SCScreenshotManager::capture_image(&filter, &cfg).map_err(|e| match &e {
-                screencapturekit::error::SCError::PermissionDenied(_) => {
-                    CaptureError::PermissionDenied
-                }
-                screencapturekit::error::SCError::NoShareableContent(_) => {
-                    CaptureError::PermissionDenied
-                }
-                _ => CaptureError::Backend {
-                    message: format!("capture_image: {e}"),
-                },
-            })?;
+        let image = SCScreenshotManager::capture_image(&filter, &cfg)
+            .map_err(|e| map_sck_error(&e, "capture_image"))?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let img_w = image.width() as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let img_h = image.height() as u32;
-        let pixels = image.rgba_data().map_err(|e| CaptureError::MalformedFrame {
-            reason: format!("CGImage::rgba_data: {e}"),
-        })?;
+        let pixels = image
+            .rgba_data()
+            .map_err(|e| CaptureError::MalformedFrame {
+                reason: format!("CGImage::rgba_data: {e}"),
+            })?;
         let stride = (img_w as usize) * 4;
 
-        // display_scale is always 1.0 for SCK (logical px). No content refresh needed.
+        // `display_scale` is always 1.0 for SCK (logical px).
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let raw = RawBgra {
             width_px: img_w,
             height_px: img_h,
@@ -287,7 +297,7 @@ mod tests {
 
     #[test]
     fn build_descriptors_assigns_indices_per_app_title() {
-        // We can't construct real SCWindows in unit tests; cover the pure
+        // We can't construct real `SCWindows` in unit tests; cover the pure
         // index-assignment logic instead.
         let a: Vec<WindowDescriptor> = Vec::new();
         assert!(a.is_empty());
@@ -308,25 +318,45 @@ mod tests {
                 1,
                 "Safari".into(),
                 "YouTube".into(),
-                Rect { x: 0, y: 0, w: 10, h: 10 },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
             ),
             (
                 2,
                 "Safari".into(),
                 "YouTube".into(),
-                Rect { x: 10, y: 0, w: 10, h: 10 },
+                Rect {
+                    x: 10,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
             ),
             (
                 3,
                 "Safari".into(),
                 "Mail".into(),
-                Rect { x: 20, y: 0, w: 10, h: 10 },
+                Rect {
+                    x: 20,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
             ),
             (
                 4,
                 "Finder".into(),
                 "YouTube".into(),
-                Rect { x: 30, y: 0, w: 10, h: 10 },
+                Rect {
+                    x: 30,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
             ),
         ];
         let d = assign_window_indices(raw);

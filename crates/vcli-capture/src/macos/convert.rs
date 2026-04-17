@@ -50,11 +50,7 @@ pub fn bgra_to_frame(raw: RawBgra) -> Result<Frame, CaptureError> {
         })?;
     if raw.pixels.len() < need {
         return Err(CaptureError::MalformedFrame {
-            reason: format!(
-                "buffer len {} < stride*height {}",
-                raw.pixels.len(),
-                need
-            ),
+            reason: format!("buffer len {} < stride*height {}", raw.pixels.len(), need),
         });
     }
     if raw.stride < (raw.width_px as usize) * 4 {
@@ -69,6 +65,7 @@ pub fn bgra_to_frame(raw: RawBgra) -> Result<Frame, CaptureError> {
 
     let scale = raw.scale;
     let (out_w, out_h, out_stride, out_pixels) = if (scale - 1.0_f32).abs() < f32::EPSILON {
+        #[allow(clippy::cast_possible_wrap)]
         (
             raw.width_px as i32,
             raw.height_px as i32,
@@ -101,7 +98,7 @@ pub fn bgra_to_frame(raw: RawBgra) -> Result<Frame, CaptureError> {
 }
 
 /// 2:1 box-filter downsample of a BGRA buffer. Returns
-/// `(out_w, out_h, out_stride, out_pixels)`. Output stride = out_w * 4.
+/// `(out_w, out_h, out_stride, out_pixels)`. Output stride = `out_w * 4`.
 fn downsample_2x(raw: &RawBgra) -> (i32, i32, usize, Vec<u8>) {
     let out_w = (raw.width_px / 2) as usize;
     let out_h = (raw.height_px / 2) as usize;
@@ -110,10 +107,10 @@ fn downsample_2x(raw: &RawBgra) -> (i32, i32, usize, Vec<u8>) {
     for y in 0..out_h {
         let src_y0 = y * 2;
         let src_y1 = src_y0 + 1;
-        let row0 = &raw.pixels
-            [src_y0 * raw.stride..src_y0 * raw.stride + raw.width_px as usize * 4];
-        let row1 = &raw.pixels
-            [src_y1 * raw.stride..src_y1 * raw.stride + raw.width_px as usize * 4];
+        let row0 =
+            &raw.pixels[src_y0 * raw.stride..src_y0 * raw.stride + raw.width_px as usize * 4];
+        let row1 =
+            &raw.pixels[src_y1 * raw.stride..src_y1 * raw.stride + raw.width_px as usize * 4];
         for x in 0..out_w {
             let sx = x * 2 * 4;
             let idx = y * out_stride + x * 4;
@@ -130,6 +127,7 @@ fn downsample_2x(raw: &RawBgra) -> (i32, i32, usize, Vec<u8>) {
             }
         }
     }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     (out_w as i32, out_h as i32, out_stride, out)
 }
 

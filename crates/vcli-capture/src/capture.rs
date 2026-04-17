@@ -46,15 +46,27 @@ pub trait Capture: Send + Sync {
 
     /// Enumerate visible application windows on all displays. Excludes
     /// off-screen and minimized windows. Stable ordering per backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureError`] if the backend fails to enumerate windows.
     fn enumerate_windows(&self) -> Result<Vec<WindowDescriptor>, CaptureError>;
 
     /// Grab a full-screen frame of the primary display.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureError`] if the backend fails to capture the screen.
     fn grab_screen(&mut self) -> Result<Frame, CaptureError>;
 
     /// Grab a frame cropped to the given window's current bounds. Backend
     /// may re-resolve the window by id; if the window has moved/resized
     /// between enumeration and grab, the returned `Frame.bounds` reflects
     /// the actual capture, not the stale descriptor bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureError`] if the window is not found or capture fails.
     fn grab_window(&mut self, window: &WindowDescriptor) -> Result<Frame, CaptureError>;
 }
 
@@ -73,7 +85,12 @@ mod tests {
             id: 42,
             app: "Safari".into(),
             title: "YouTube".into(),
-            bounds: Rect { x: 0, y: 0, w: 800, h: 600 },
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
             window_index: WindowIndex(0),
             display: DisplayId::PRIMARY,
         };

@@ -1,4 +1,4 @@
-//! vcli-capture — Capture trait, macOS ScreenCaptureKit backend, mock impl, Windows stub.
+//! vcli-capture — Capture trait, macOS `ScreenCaptureKit` backend, mock impl, Windows stub.
 //!
 //! See spec §v0 scope and §Architecture → crate responsibilities. All outputs
 //! use `vcli-core` types (`Frame`, `FrameFormat`, `Rect`, `WindowIndex`).
@@ -30,4 +30,4 @@ pub mod windows;
 pub use capture::{Capture, DisplayId, WindowDescriptor};
 pub use error::CaptureError;
 pub use mock::MockCapture;
-pub use permission::{PermissionStatus, check_screen_recording_permission};
+pub use permission::{check_screen_recording_permission, PermissionStatus};

@@ -61,10 +61,16 @@ impl MockCapture {
 
     /// Set canned frames for a particular window id. Subsequent calls to
     /// `grab_window` with that descriptor cycle through these frames.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn set_window_frames(&self, window_id: u64, frames: Vec<Frame>) {
         let mut g = self.inner.lock().unwrap();
-        if let Some((_, slot)) =
-            g.window_frame_map.iter_mut().find(|(id, _)| *id == window_id)
+        if let Some((_, slot)) = g
+            .window_frame_map
+            .iter_mut()
+            .find(|(id, _)| *id == window_id)
         {
             *slot = frames;
         } else {
@@ -74,6 +80,10 @@ impl MockCapture {
 
     /// Arm the next call to any grab/enumerate method to fail with `e`. Used
     /// to exercise error paths in consumer tests. Consumed by one failing call.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn arm_error(&self, e: CaptureError) {
         self.inner.lock().unwrap().next_error = Some(e);
     }
@@ -121,7 +131,10 @@ impl Capture for MockCapture {
         if let Some(e) = Self::take_armed_error(&mut g) {
             return Err(e);
         }
-        let pos = g.window_frame_map.iter().position(|(id, _)| *id == window.id);
+        let pos = g
+            .window_frame_map
+            .iter()
+            .position(|(id, _)| *id == window.id);
         let Some(pos) = pos else {
             return Err(CaptureError::WindowNotFound { id: window.id });
         };
@@ -154,7 +167,18 @@ mod tests {
 
     fn tiny(format: FrameFormat, value: u8) -> Frame {
         let bytes: Arc<[u8]> = vec![value; 4 * 4 * 2].into();
-        Frame::new(format, Rect { x: 0, y: 0, w: 4, h: 2 }, 4 * 4, bytes, 0)
+        Frame::new(
+            format,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
+            4 * 4,
+            bytes,
+            0,
+        )
     }
 
     #[test]
@@ -188,7 +212,12 @@ mod tests {
             id: 9,
             app: "Finder".into(),
             title: "Downloads".into(),
-            bounds: Rect { x: 0, y: 0, w: 1000, h: 600 },
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                w: 1000,
+                h: 600,
+            },
             window_index: WindowIndex(0),
             display: DisplayId::PRIMARY,
         };
@@ -203,7 +232,12 @@ mod tests {
             id: 7,
             app: "Safari".into(),
             title: "YT".into(),
-            bounds: Rect { x: 0, y: 0, w: 4, h: 2 },
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
             window_index: WindowIndex(0),
             display: DisplayId::PRIMARY,
         };
@@ -220,7 +254,12 @@ mod tests {
             id: 100,
             app: "X".into(),
             title: "Y".into(),
-            bounds: Rect { x: 0, y: 0, w: 4, h: 2 },
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
             window_index: WindowIndex(0),
             display: DisplayId::PRIMARY,
         };
