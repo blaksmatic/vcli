@@ -1,0 +1,791 @@
+---
+title: vcli — design
+status: proposed
+date: 2026-04-16
+author: @blaksmatic
+---
+
+# vcli — design
+
+## Summary
+
+**vcli** (visual CLI) is a local, persistent screen-control runtime that AI agents (and humans) command through declarative JSON programs. A daemon loads each program and executes it reactively against live screen state — no agent-in-the-loop on the hot path. Think of it as a small operating system for screen-scoped programs, driven by a Unix-philosophy CLI.
+
+The thesis is the robotics hierarchy: a slow planner (LLM, out of scope for the daemon) emits a reactive program; a fast runtime executes it at frame rate (10fps target) and only calls back to the planner on completion, failure, or novelty. One LLM call per task, not per frame.
+
+This is a personal open-source lab project. Goals are craft, learning, and a portfolio-worthy artifact. Local-first, no data leaves the machine.
+
+## Goals
+
+- Prove the reactive-runtime thesis end-to-end on macOS.
+- Ship a canonical demo (YouTube ad skipper) that a non-technical person recognizes as "a thing they'd actually use."
+- Keep the daemon → CLI → planner boundaries clean enough that each piece can evolve independently.
+- Design for macOS + Windows (traits from day 1); ship macOS first.
+- Predictable frame budget at 10fps with headroom for Tier-3 perception later.
+
+## Non-goals
+
+- Cross-machine orchestration. Local-first is the whole point.
+- Proprietary hosted model runtimes. Everything runs on the user's hardware.
+- Browser-extension-level DOM interactivity. We operate at the screen/input layer intentionally.
+- Mobile / touch device control.
+- LLM planner integration in v0. The daemon accepts JSON from any source; the planner is a separate layer built later.
+
+## v0 scope
+
+**In:**
+
+- Rust daemon + thin Rust CLI client
+- Unix-socket IPC with framed JSON
+- macOS capture (ScreenCaptureKit via `core-graphics`) + input (`core-graphics` events or `enigo`) backends
+- `Capture` and `Input` traits with mock backends for testing and stub slots for Windows
+- JSON DSL: predicates, regions, watches, body, triggers, completion events
+- Tiered perception: Tier 1 (`color_at`, `pixel_diff`, logical, `elapsed_ms_since_true`) + Tier 2 (`template`)
+- 10fps scheduler with shared capture, shared predicate cache, action arbitration
+- Program lifecycle: pending → waiting → running → blocked → completed | failed | cancelled
+- SQLite-backed program store, content-addressed asset store, in-memory ring-buffer trace
+- `vcli resume` for post-restart continuation with body-cursor checkpointing
+- Unit tests, scenario tests (property assertions + determinism-gated golden trace diffs), DSL fuzz, real-Safari+YouTube E2E demo (gated behind `--features e2e`)
+
+**Out (deferred to later phases):**
+
+- OCR (v0.2), VLM (v0.3)
+- Windows backend (v0.4)
+- Planner integration (v0.5; separate repo)
+- Games / DirectInput support
+- Multi-display capture
+- Remote daemon with auth
+
+## Architecture
+
+Single Cargo workspace. Dependency arrows point downward — no cycles.
+
+```
+vcli/
+├── Cargo.toml                      # workspace
+├── crates/
+│   ├── vcli-core/                  # shared types. Zero runtime deps.
+│   ├── vcli-dsl/                   # parse + validate JSON programs
+│   ├── vcli-capture/               # Capture trait + macOS impl
+│   ├── vcli-input/                 # Input trait + macOS impl
+│   ├── vcli-perception/            # evaluators + PerceptionCache
+│   ├── vcli-runtime/               # scheduler / tick loop / arbitration
+│   ├── vcli-store/                 # SQLite + AssetStore + TraceBuffer
+│   ├── vcli-ipc/                   # framed JSON over socket
+│   ├── vcli-daemon/                # binary: wires everything; tokio + signals
+│   └── vcli-cli/                   # binary: thin client
+├── assets/fixtures/                # test fixtures (canned frames, template PNGs)
+├── docs/
+└── xtask/                          # codegen, integration helpers
+```
+
+### Crate responsibilities
+
+- **`vcli-core`** — `Program`, `Predicate`, `Action`, `Step`, `Region`, `ProgramId`, `Frame`, `Match`, `ProgramState`, event types, error types. Pure `serde` derives. No `tokio`, no runtime deps. Unit tests stay instant.
+- **`vcli-dsl`** — JSON → validated `Program`. Validation catches unknown predicate references, cycles in `relative_to`, unknown action/predicate kinds, missing assets (before they reach the scheduler), malformed expressions, unsupported DSL majors.
+- **`vcli-capture`** — `trait Capture { fn grab(&mut self) -> Result<Frame>; }`. macOS impl via `core-graphics` (ScreenCaptureKit). Mock impl (`CannedSequenceCapture`) returns pre-loaded PNGs per call.
+- **`vcli-input`** — `trait Input { fn dispatch(&mut self, action: InputAction) -> Result<()>; }`. macOS impl via `core-graphics` events (or `enigo` — evaluated at impl time). Mock impl records calls.
+- **`vcli-perception`** — `trait PredicateEvaluator` + v0 evaluators + `PerceptionCache`. Image decode, template matching (imageproc NCC), color + pixel-diff, logical composition.
+- **`vcli-runtime`** — the scheduler. Sync tick loop driven by a timer. Accepts `impl Capture` + `impl Input` + `impl Clock`. All interesting logic lives here.
+- **`vcli-store`** — SQLite schema + migrations + asset CAS + trace ring buffers.
+- **`vcli-ipc`** — frame codec, `Request` / `Response` / `Event` types, error payloads.
+- **`vcli-daemon`** — bin. Tokio reactor, signals, launchd/systemd friendliness. Owns the runtime handle. Bridges socket messages into the runtime via channels.
+- **`vcli-cli`** — bin. Clap command parser, IPC client, pretty + `--json` output modes.
+
+### Threading model
+
+- **Single dedicated thread for the tick loop.** Deterministic state transitions.
+- **`rayon` pool for parallel Tier-1/Tier-2 evaluation** of unique predicates within a tick.
+- **`tokio` runtime in the daemon** for IPC, signals, and bridging — never contaminates the scheduler's logic.
+- **Dedicated worker threads for Tier-3 evaluators** (OCR, VLM — v0.2+). Bounded channels. Tick loop reads last cached result; never awaits Tier-3 inline.
+
+## DSL
+
+### Program shape
+
+```jsonc
+{
+  "version": "0.1",
+  "name": "yt-ad-skipper",
+  "id": null,                                 // optional; daemon assigns UUID if null
+
+  "trigger": { "kind": "on_submit" },         // on_submit | on_predicate | on_schedule | manual
+
+  "predicates": { "<name>": { /* Predicate */ } },
+
+  "watches": [ /* Watch */ ],                 // reactive, evaluated every tick while running
+  "body":    [ /* Step */ ],                  // sequential, runs once top-to-bottom
+
+  "on_complete": { "emit": "<event_name>" },
+  "on_fail":     { "emit": "<event_name>" },
+
+  "timeout_ms": 300000,                       // null = no limit
+  "labels": { "owner": "me", "kind": "demo" }
+}
+```
+
+### Predicate kinds (v0)
+
+```jsonc
+{ "kind": "template",   "image": "sha256:…" | "assets/skip.png",
+                        "confidence": 0.9, "region": Region, "throttle_ms": 200 }
+
+{ "kind": "color_at",   "point": {"x": 100, "y": 200}, "rgb": [255,0,0], "tolerance": 15 }
+
+{ "kind": "pixel_diff", "region": Region, "baseline": "sha256:…", "threshold": 0.05 }
+
+{ "kind": "all_of",     "of": ["pred_a", "pred_b"] }
+{ "kind": "any_of",     "of": ["pred_a", "pred_b"] }
+{ "kind": "not",        "of": "pred_a" }
+
+{ "kind": "elapsed_ms_since_true", "predicate": "pred_a", "ms": 1000 }
+```
+
+A predicate evaluation returns `PredicateResult { truthy: bool, match: Option<MatchData>, at: Timestamp }`. `match` is populated for kinds that produce locations (`template` → bounding box + center + confidence). Logical kinds produce no match.
+
+### Region kinds
+
+```jsonc
+{ "kind": "absolute", "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 } }
+
+{ "kind": "window", "app": "Safari", "title_contains": "YouTube" }
+
+{ "kind": "relative_to", "predicate": "on_cart_page", "anchor": "match",
+  "offset": { "x": 0, "y": 40 }, "size": { "w": 300, "h": 120 } }
+```
+
+`window` regions resolve via the macOS Accessibility API each tick, with a short-TTL (~500ms) cache to avoid hammering AX. Missing windows produce a non-truthy predicate — not an error.
+
+`relative_to` regions resolve after their referenced predicate evaluates (topological sort within a tick). If the reference isn't truthy, the dependent is not truthy either.
+
+### Watch (reactive rule)
+
+```jsonc
+{
+  "when": "skip_visible",                      // predicate name or inline object
+  "do":   [ /* Step */ ],
+  "throttle_ms": 500,
+  "lifetime": { "kind": "persistent" }         // persistent | one_shot |
+                                               // until_predicate(name) | timeout_ms(N)
+}
+```
+
+Watches fire when `when` transitions false→true (tracked per-(program, watch)), respecting `throttle_ms`. `one_shot` fires exactly once; `until_predicate` runs persistently until the named predicate is truthy, then is removed.
+
+### Step (body and `watch.do` share the vocabulary)
+
+```jsonc
+// Input actions
+{ "kind": "click",  "at": "$skip_visible.match.center", "button": "left" }
+{ "kind": "type",   "text": "hello world" }
+{ "kind": "key",    "combo": ["cmd", "s"] }
+{ "kind": "scroll", "at": "$target.match.center", "dy": -400 }
+{ "kind": "move",   "at": "$foo.match.top_left" }
+
+// Control flow (body only)
+{ "kind": "wait_for",  "predicate": "on_cart_page", "timeout_ms": 5000,
+                       "on_timeout": "fail" }           // fail | continue | retry
+{ "kind": "assert",    "predicate": "item_row_visible", "on_fail": "fail" }
+{ "kind": "sleep_ms",  "ms": 250 }
+
+// Reserved — schema-valid, not implemented in v0
+{ "kind": "subprogram", "ref": "<program_id>" }
+```
+
+### Expression language
+
+Dotted paths only. No arithmetic, no conditionals in v0.
+
+```
+$<predicate_name>.match.center        // Point
+$<predicate_name>.match.top_left      // Point
+$<predicate_name>.match.box           // Rect
+$<predicate_name>.match.confidence    // f32
+```
+
+References to predicates without a match produce a step error (`program.failed` with a clear diagnostic). No silent null propagation.
+
+### Validation
+
+`vcli-dsl` rejects before the scheduler ever sees a program:
+
+- Unknown predicate name referenced from watch, step, region, or expression
+- Cycle in `relative_to` predicate graph
+- Unknown action or predicate `kind`
+- Missing `image` asset (not in asset store and not a readable file path)
+- Malformed expression (unknown accessor, unknown predicate)
+- `version` major the daemon doesn't understand
+
+Errors include JSON path info: `{ "code": "invalid_program", "message": "unknown predicate 'foo'", "path": "watches[0].when" }`.
+
+### Full example — YT ad skipper
+
+```json
+{
+  "version": "0.1",
+  "name": "yt-ad-skipper",
+  "trigger": { "kind": "on_submit" },
+  "predicates": {
+    "skip_visible": {
+      "kind": "template",
+      "image": "assets/yt_skip.png",
+      "confidence": 0.9,
+      "region": { "kind": "window", "app": "Safari", "title_contains": "YouTube" },
+      "throttle_ms": 200
+    }
+  },
+  "watches": [
+    {
+      "when": "skip_visible",
+      "do":   [{ "kind": "click", "at": "$skip_visible.match.center" }],
+      "throttle_ms": 500,
+      "lifetime": { "kind": "persistent" }
+    }
+  ],
+  "body": [],
+  "on_complete": { "emit": "ad_skipped" }
+}
+```
+
+### Full example — sequential buy-the-book
+
+```json
+{
+  "version": "0.1",
+  "name": "buy-the-book",
+  "trigger": { "kind": "on_submit" },
+  "predicates": {
+    "cart_icon":         { "kind": "template", "image": "assets/cart.png",        "confidence": 0.9 },
+    "on_cart_page":      { "kind": "template", "image": "assets/cart_header.png", "confidence": 0.9 },
+    "item_row_visible":  { "kind": "template", "image": "assets/book_thumb.png",
+                           "region": { "kind": "relative_to", "predicate": "on_cart_page" },
+                           "confidence": 0.85 }
+  },
+  "body": [
+    { "kind": "click",    "at": "$cart_icon.match.center" },
+    { "kind": "wait_for", "predicate": "on_cart_page",    "timeout_ms": 5000, "on_timeout": "fail" },
+    { "kind": "assert",   "predicate": "item_row_visible", "on_fail": "fail" }
+  ],
+  "watches": [],
+  "on_complete": { "emit": "purchase_verified" }
+}
+```
+
+### Design properties
+
+- **One vocabulary, two contexts.** `watch.do` and `body` use the same `Step` type. Only `body` gets `wait_for` / `assert` / `sleep_ms`.
+- **Predicates are first-class and named.** Enables structural dedup across programs.
+- **No program-level variables in v0.** Stateful semantics are encoded via predicates (e.g., `elapsed_ms_since_true`). Avoids imperative-in-a-reactive-language confusion. Variables can be added later without breaking existing programs.
+- **No body conditionals in v0.** `wait_for` + `assert` + watches cover the v0 demo programs. `if`/`else` added only when a concrete program needs them.
+- **Extension slots reserved** in the schema (e.g., `subprogram`) so later versions add features without schema churn.
+
+## Runtime & scheduler
+
+### Tick loop
+
+```
+loop {
+  tick_start = now()
+  frame      = capture.grab()                     // one capture, shared across programs
+
+  active_preds = scheduler.dedup_predicates(running_programs)
+
+  // Tier 1: evaluate cheap predicates every tick
+  // Tier 2: evaluate throttled predicates if last_eval + throttle_ms <= now
+  // Tier 3 (post-v0): never evaluated inline — cache read only
+  perception_results = perception.evaluate(&frame, &active_preds, cache.as_mut())
+
+  for program in running_programs {
+    program.advance(&perception_results, &clock)   // emits zero or more pending actions
+  }
+
+  chosen_actions = action_arbiter.resolve(all_pending_actions)
+
+  for action in chosen_actions { input.dispatch(action) }   // synchronous with confirmation
+
+  event_bus.drain_and_publish()
+  trace.append(tick_record)
+
+  sleep_until(tick_start + TICK_PERIOD)           // TICK_PERIOD = 100ms @ 10fps
+}
+```
+
+### Shared capture
+
+Exactly one `capture.grab()` per tick. Frame is an `Arc<Frame>`, no copies. If capture exceeds the tick budget, the scheduler **skips ticks** rather than stacking them — emits `tick.frame_skipped { reason: "capture_overrun" }` and resumes on the next timer.
+
+### Predicate cache
+
+```rust
+struct PerceptionCache {
+    entries: HashMap<PredicateHash, CacheEntry>,
+}
+struct CacheEntry {
+    last_result:  PredicateResult,
+    last_eval_at: Instant,
+    refcount:     usize,
+}
+```
+
+- **Key = content hash** of canonical-serialized predicate AST (names stripped; asset paths resolved to content hashes first). Two programs with structurally identical predicates share a cache slot and evaluate once per tick.
+- **Refcount** on program entering `running`; decrement on leaving. Evicted when zero on the next tick.
+- **Throttle check lives in the cache**, not in programs — consistent semantics regardless of reference count.
+
+### Program state machine
+
+```
+                    submit()
+                       │
+                       ▼
+                   pending
+                       │
+                    daemon ready
+                       ▼
+                   waiting ──── trigger fires ────▶ running
+                                                      │
+                                                      ├── body errors      → failed
+                                                      ├── timeout_ms       → failed
+                                                      ├── cancel request   → cancelled
+                                                      ├── body complete    → completed
+                                                      ├── on_complete      → completed
+                                                      └── blocked (future) → blocked
+                                                              │
+                                                           unblock
+                                                              ▼
+                                                           running
+```
+
+`blocked` is reserved for v0 but no feature transitions into it. Allows later features (external-event awaiting) without schema migration.
+
+Transitions are atomic within a tick and emit `program.state_changed { from, to, reason }`.
+
+### Action arbitration
+
+At step 6 of the tick loop the arbiter resolves pending actions from all programs:
+
+1. **Mouse exclusivity.** At most one mouse action (move, click, scroll) per tick. Highest-priority pending action wins; ties broken by earliest submission time, then `program_id` for determinism.
+2. **Keyboard exclusivity.** At most one keyboard action (type, key) per tick. Same resolution.
+3. **Mouse + keyboard can coexist** in the same tick.
+4. **Arbitration losers drop.** No re-queue. The next tick's fresh predicate evaluation decides whether to re-fire. Losers emit `action.deferred { program_id, reason: "conflict_with": <other_program_id> }` to the trace.
+
+### Action confirmation
+
+`Input::dispatch` returns `Result<(), InputError>` synchronously (microseconds for OS-level confirmation — not visual confirmation). Body steps advance the program counter only after dispatch confirms. Watch-triggered actions are counted as fired only after dispatch confirms. Body cursor is written to SQLite on each confirmation (see Persistence).
+
+### Watch lifetimes
+
+| Lifetime | Behavior |
+|---|---|
+| `one_shot` | Fires once when `when` transitions false→true; removed for this program run. |
+| `persistent` | Fires every false→true transition, respecting `throttle_ms`. |
+| `until_predicate(name)` | Persistent until the named predicate becomes truthy; then removed. |
+| `timeout_ms(N)` | Persistent until N ms after program started; then removed. |
+
+### Trigger evaluation (v0)
+
+- `on_submit` — fires immediately when daemon is ready.
+- `on_predicate` — program stays `waiting`; runtime evaluates the trigger predicate every tick until truthy, then transitions to `running`.
+- `on_schedule` — cron-ish expression, checked once per tick (v0.1 deferral).
+- `manual` — stays in `waiting` until `vcli start <id>`.
+
+### Clock abstraction
+
+All time reads go through a `Clock` trait. Production impl uses `Instant::now()`; `TestClock` fast-forwards deterministically. Essential for testing lifetimes, throttles, and timeouts without `thread::sleep`.
+
+## Perception pipeline
+
+### Trait
+
+```rust
+pub trait PredicateEvaluator: Send + Sync {
+    fn kind(&self) -> PredicateKind;
+    fn cost_class(&self) -> CostClass;    // Cheap | Medium | Expensive
+    fn evaluate(&self, frame: &Frame, predicate: &PredicateSpec,
+                cache: &mut PerceptionCache) -> PredicateResult;
+}
+```
+
+The scheduler orchestrates by cost class and has no knowledge of specific evaluators.
+
+### Tiered policy
+
+| Tier | Cost | When | v0 evaluators |
+|------|------|------|---------------|
+| **1 — Cheap** | <1ms | Every tick | `color_at`, `pixel_diff`, logical, `elapsed_ms_since_true` |
+| **2 — Medium** | 5–30ms | Respecting `throttle_ms` | `template` |
+| **3 — Expensive** | 100ms+ | Out-of-band worker; cache-read only (v0.2+) | `ocr`, `vlm` |
+
+Tier 1 runs inline on the tick thread. Tier 2 fans out to `rayon` across unique predicates within the tick. Tier 3 runs on dedicated worker threads with bounded request channels; the tick loop reads the last cached result and issues a new request only when staleness permits.
+
+### Template matching
+
+- `imageproc::template_matching::match_template` with normalized SSE (NCC-ish).
+- **Region-scoped by default.** Validator emits a warning at submit if a template has a full-display `absolute` region and `confidence < 0.95`.
+- Pyramid search is **not implemented in v0** — added only if full-res blows the tick budget.
+- `confidence` is an inclusive threshold.
+- **Asset loading:** at submit, `image: "path.png"` is read, hashed, inserted into the asset store, and rewritten in the stored program to `sha256:…`. Decoded `DynamicImage`s are kept in a bounded LRU keyed by hash (not by program), shared across programs.
+
+### Color / pixel diff
+
+- `color_at`: single-pixel read + RGB Euclidean distance within tolerance.
+- `pixel_diff`: perceptual hash (dHash) over region + Hamming distance against baseline hash.
+
+### Logical composition
+
+`all_of` / `any_of` / `not` combine dependencies' `.truthy` flags. No fresh cost. Dependencies topologically sorted per tick; cycles rejected at submit.
+
+### `elapsed_ms_since_true`
+
+Per-(program, predicate) state (last transition time) lives on the program's runtime state, not in the shared cache — it's program-local. Microsecond cost.
+
+### Window region resolution (macOS v0)
+
+- macOS Accessibility API (`AXUIElement`) → window geometry.
+- Resolved box cached ~500ms per `(app, title_contains)` tuple.
+- No matching window → predicate is not truthy (not an error). Programs quietly no-op when target app is absent.
+
+### Caches
+
+1. **`PerceptionCache`** (shared, per predicate hash) — last result + eval time + refcount.
+2. **Template asset LRU** (shared, per image hash) — decoded `DynamicImage`s.
+3. **Window geometry cache** (short TTL) — per `(app, title_contains)` tuple.
+
+All three instrumented with tick-time histograms emitted in trace records.
+
+### v0 exclusions (extensibility preserved)
+
+- No OCR, no VLM — both slot in behind the existing `PredicateEvaluator` trait without scheduler changes.
+- No motion / optical flow.
+- No multi-display — single primary display in v0.
+- No text-color heuristics.
+
+## IPC protocol & CLI
+
+### Socket
+
+```
+$XDG_RUNTIME_DIR/vcli.sock
+~/Library/Application Support/vcli/vcli.sock   # fallback
+```
+
+Permissions `0600` (owner only). Daemon creates on start; unlinks on shutdown. CLI discovers via the same resolution.
+
+### Wire format
+
+Length-prefixed frames: `u32` big-endian length, then UTF-8 JSON. Binary-safe, debuggable, zero new deps.
+
+### Messages
+
+```jsonc
+// Request
+{ "id": "<uuid>", "op": "submit"|"list"|"status"|"cancel"|"resume"|
+                        "logs"|"events"|"trace"|"health"|"shutdown",
+  "params": { /* op-specific */ } }
+
+// Response (non-streaming)
+{ "id": "<uuid>", "ok": true,  "result": { /* op-specific */ } }
+{ "id": "<uuid>", "ok": false, "error": { "code": "…", "message": "…", "path": "…" } }
+
+// Event (pushed on streaming ops like logs / events)
+{ "stream": "events", "type": "program.state_changed",
+  "program_id": "…", "data": { "from": "waiting", "to": "running" },
+  "at": "2026-04-16T19:42:11.123Z" }
+```
+
+### Events (v0)
+
+```
+program.submitted            { program_id, name }
+program.state_changed        { program_id, from, to, reason }
+program.completed            { program_id, emit? }
+program.failed               { program_id, reason, step? }
+program.resumed              { program_id, from_step }
+watch.fired                  { program_id, watch_index, predicate }
+action.dispatched            { program_id, step, target? }
+action.deferred              { program_id, step, reason }
+tick.frame_skipped           { reason }
+capture.permission_missing   { backend }
+daemon.started / daemon.stopped
+```
+
+Per-tick predicate evaluations are written to the in-memory trace but **not** broadcast on `events` — too chatty. Access via `vcli trace dump`.
+
+### Error codes (v0)
+
+- `invalid_program` — DSL validation failure; accompanied by JSON path
+- `unknown_program`
+- `bad_state_transition` — e.g., `cancel` on a completed program
+- `permission_denied` — macOS Accessibility or Screen Recording not granted
+- `capture_failed`
+- `daemon_busy`
+- `internal` — logged server-side with correlation id
+
+### CLI surface (v0)
+
+```
+vcli submit <program.json>              # → program_id. Resolves assets, validates, submits.
+vcli list [--state STATE]               # tabular list of programs
+vcli status <program_id>                # detailed status
+vcli cancel <program_id>                # running → cancelled; idempotent
+vcli resume <program_id> [--from-start] # continues after daemon_restart failure
+
+vcli logs <program_id> [--follow]       # streams program-scoped events
+vcli events [--follow]                  # streams all events (firehose)
+vcli trace dump <program_id> [--save-to file.jsonl]
+
+vcli health                             # version, uptime, tick stats, cache sizes
+vcli daemon start                       # fork + detach; idempotent
+vcli daemon run                         # foreground; for launchd/systemd
+vcli daemon stop                        # graceful
+vcli daemon status                      # running?, pid, socket path
+vcli gc                                 # asset GC; manual
+```
+
+All commands support `--json`. Exit codes: `0` success, `1` generic, `2` validation, `3` not found, `4` daemon not running.
+
+### Auth
+
+**None in v0.** Socket permissions (`0600`, owner-only) are the security boundary — anyone who can connect already has your user account. Documented in the README. Token / TLS auth lands when remote daemon becomes a thing (post-v0).
+
+## Persistence, tracing, errors
+
+### Data layout (macOS v0)
+
+```
+~/Library/Application Support/vcli/
+├── vcli.db                        # SQLite
+├── assets/sha256/ab/cd/abcd…ef.png
+├── daemon.pid
+└── config.toml                    # optional
+
+~/Library/Logs/vcli/daemon.log     # rotated daily, 7-day retention
+```
+
+### SQLite schema (v0)
+
+```sql
+CREATE TABLE programs (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    source_json     TEXT NOT NULL,                -- canonical form
+    state           TEXT NOT NULL,                -- pending|waiting|running|blocked|
+                                                  -- completed|failed|cancelled
+    submitted_at    INTEGER NOT NULL,
+    started_at      INTEGER,
+    finished_at     INTEGER,
+    last_error_code TEXT,
+    last_error_msg  TEXT,
+    labels_json     TEXT NOT NULL DEFAULT '{}',
+    body_cursor     INTEGER NOT NULL DEFAULT 0,   -- next body step to execute
+    body_entered_at INTEGER                       -- unix ms when body began
+);
+CREATE INDEX programs_state_idx ON programs(state);
+
+CREATE TABLE program_assets (
+    program_id  TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    asset_hash  TEXT NOT NULL,
+    PRIMARY KEY (program_id, asset_hash)
+);
+CREATE INDEX program_assets_hash_idx ON program_assets(asset_hash);
+
+CREATE TABLE events (                             -- durable terminal events only
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id  TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    type        TEXT NOT NULL,
+    data_json   TEXT NOT NULL,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX events_program_idx ON events(program_id);
+CREATE INDEX events_at_idx      ON events(at);
+
+CREATE TABLE schema_version (version INTEGER NOT NULL);
+INSERT INTO schema_version VALUES (1);
+```
+
+- **In the DB:** programs, state, durable terminal events, asset refs, body cursor.
+- **Not in the DB:** per-tick traces (in-memory ring), transient events (bus only), frame captures (never stored).
+
+### Asset store (content-addressed)
+
+- `sha256(bytes)` → file at `assets/sha256/<2>/<2>/<hex>.<ext>`.
+- At submit, the DSL layer walks the program, reads each `image: "path"` from disk, hashes it, inserts (idempotent), and rewrites the program JSON to `image: "sha256:<hash>"`. Stored `source_json` always references hashes — programs become self-contained and hash-equivalent.
+- GC opportunistic: `vcli gc` is explicit; daemon triggers GC on startup if last run was >7 days ago. Never blocks the tick loop.
+
+### Trace buffer (in-memory)
+
+```rust
+struct TraceBuffer {
+    per_program: DashMap<ProgramId, RingBuffer<TraceRecord>>,   // 10_000 records each
+    global:      RingBuffer<TraceRecord>,                        // 100_000 records
+}
+struct TraceRecord {
+    tick:       u64,
+    at:         UnixMs,
+    program_id: Option<ProgramId>,
+    kind:       TraceKind,                                       // predicate_eval, state_change, …
+    payload:    serde_json::Value,
+}
+```
+
+Capped at ~50MB worst-case. `vcli trace dump <id>` emits newline-delimited JSON to stdout; `--save-to file.jsonl` persists on demand.
+
+### Restart semantics
+
+On daemon startup:
+
+1. Read config.
+2. Open SQLite, run migrations.
+3. Scan assets vs. `program_assets` refs; log orphan count (no auto-GC).
+4. **Programs in state `running` transition to `failed` with code `daemon_restart`**, reason `"daemon restarted during execution"`. Planner sees the event cleanly.
+5. Programs in state `waiting` are reloaded into the scheduler with their triggers.
+6. Start tick loop, event bus, IPC listener. Emit `daemon.started`.
+
+### Resume
+
+`vcli resume <program_id>` transitions a program that failed with `daemon_restart` back into `running`, starting at `body_cursor`. Watches always restart fresh. `--from-start` ignores the cursor and re-runs the body from index 0. Emits `program.resumed { from_step }`.
+
+Edge case: if `body_cursor == len(body)` at failure time, resume re-enters `running` with body complete — behaves as a pure-watches program from that point.
+
+### Graceful shutdown
+
+`SIGTERM` / `vcli daemon stop`:
+
+1. Stop accepting new IPC connections.
+2. Finish the current tick, halt the loop.
+3. Keep `running` programs in `running` state in the DB (they'll be transitioned to `failed(daemon_restart)` on next startup per the restart semantics above).
+4. Close SQLite, unlink socket, emit `daemon.stopped`, exit 0.
+
+`SIGKILL` skips this path — state changes are checkpointed on every transition (synchronous SQLite write), so the DB is never more than one tick behind reality.
+
+### Error surfaces
+
+| Surface | Consumer | Shape |
+|---|---|---|
+| CLI exit | Shell scripts | Exit code + stderr |
+| IPC response | Client | `{ code, message, path? }` |
+| Program-level failure | DB row + event | `program.failed { reason, step? }` |
+
+Daemon-internal errors (`capture_failed`, `internal`) are logged via `tracing` at ERROR, surfaced in `vcli health`, and any program they affect is marked `failed(internal)` so it doesn't hang.
+
+### Structured logging
+
+`tracing` + `tracing-subscriber`, JSON in prod (detected via `!stderr.is_terminal()`), pretty in dev. File rotates daily, 7-day retention. `RUST_LOG` respected.
+
+Trace records (program-semantic) and tracing logs (daemon-health) are intentionally separate: different audiences, different storage, different queries.
+
+## Testing strategy
+
+Three layers, each matched to the right boundary.
+
+### Layer 1 — Unit tests (per crate, <1s)
+
+- **`vcli-core`** — serde round-trips, canonical hashing stability.
+- **`vcli-dsl`** — validation positive / negative cases; snapshot-style input → expected outcome.
+- **`vcli-perception`** — each evaluator against canned `Frame` PNGs.
+- **`vcli-runtime`** — internal scheduler helpers (e.g., arbiter resolution rules).
+- **`vcli-ipc`** — frame codec, version field backwards-compat guard.
+- **`vcli-store`** — migrations, asset dedup, GC correctness.
+
+### Layer 2 — Scenario tests (deterministic; runtime crate)
+
+The runtime crate has a `Scenario` harness:
+
+```rust
+let mut scenario = Scenario::new()
+    .with_frames(load_canned_sequence("fixtures/yt_ad_sequence/"))
+    .with_clock(TestClock::new("2026-01-01T00:00:00Z"))
+    .with_program(include_str!("fixtures/yt_ad_skipper.json"));
+
+scenario.run_until_state(ProgramState::Completed, Duration::secs(30))?;
+
+assert_eq!(scenario.action_count(ActionKind::Click), 3);
+assert_eq!(scenario.program_state(pid), ProgramState::Completed);
+assert_trace_matches!(scenario.trace(), "fixtures/yt_ad_skipper.trace.jsonl");  // golden
+```
+
+- **Property assertions by default** (counts, final states, absence of deferreds).
+- **Golden trace diffs** kept only for fully-deterministic scenarios (mock capture + test clock + mock input). `cargo test -- --update-goldens` regenerates them when an intentional change lands.
+- **Every v0 feature has a scenario.** One-shot / persistent / `until_predicate` / `timeout_ms` watches; body sequencing; `wait_for` timeout; `assert` failure; action conflict between two programs; predicate cache dedup; `elapsed_ms_since_true`; daemon restart produces `failed(daemon_restart)`; resume recovers at `body_cursor`; `--from-start` resume.
+
+### Layer 3 — E2E on real hardware
+
+One canonical integration test, gated behind `cargo test --features e2e`:
+
+- Opens a Safari tab on real YouTube (user-navigated; not scripted), loads a video with a pre-roll ad.
+- Submits the YT ad skipper program.
+- Watches `events --follow` for `ad_skipped`.
+- Asserts the ad was actually dismissed via pixel-diff on the video region.
+
+Property assertions only (no golden). README documents that this can flake on YouTube's UI/AB-test changes and the template asset may need updating — that's the whole point: the system is tracking a real moving target.
+
+### Frame fixtures
+
+Under `assets/fixtures/`, three categories:
+
+1. **Synthetic** — tiny PNGs (200×200 white + 40×40 red, etc.) for predicate unit tests.
+2. **UI captures** — real screenshots of target UIs, PNG, cropped, small.
+3. **Sequences** — numbered directories (`yt_ad_sequence/000.png`, `001.png`, …) fed into `Scenario`.
+
+Target total fixture weight: under 10MB.
+
+### Fuzz testing
+
+`cargo fuzz` target on `vcli-dsl`'s parser + validator. `arbitrary`-derived `Program` inputs. Runs manually / on a scheduled GitHub Action. Not a blocker for day-to-day development.
+
+### Not in v0 testing
+
+- No macOS GUI CI. Everything except `--features e2e` runs in CI.
+- No VLM tests (VLM doesn't exist in v0).
+- No automated perf regressions. Manual `vcli health` benchmark documented in README.
+
+## Roadmap
+
+### v0.1 — this spec
+
+macOS, YT ad skipper works end-to-end. Ship a 60-second demo recording.
+
+### v0.2 — OCR
+
+Tier-3 evaluator worker, `ocr_text` and `ocr_number` predicate kinds. Demo: "wait for `Finished` in the iTerm build output, then run the next command."
+
+### v0.3 — VLM
+
+Tier-3 evaluator running a small local model (phi-3-vision / Qwen2.5-VL-3B / TBD) via `candle` or `ort`. `vlm` predicate kind with aggressive throttling (5s+ default between evals). Demo: "alert me if a Cloudflare human-verification appears."
+
+### v0.4 — Windows backend
+
+`windows-capture` for capture, `enigo` for input, `\\.\pipe\vcli` for IPC. Windows region kinds (class name, title regex). Document DirectInput limitation (Interception driver deferred). Demo: same YT ad skipper working on Windows with zero DSL changes.
+
+### v0.5 — Planner (separate repo)
+
+Thin LLM wrapper consuming the vcli event stream. Translates natural language goals into programs, submits them, reacts to completion/failure events. Uses public IPC.
+
+### v0.6+ — pick-your-favorite
+
+Subprogram composition • DirectInput games (Interception) • multi-display • remote daemon with auth • replay mode (`vcli replay <trace.jsonl>`) • read-only web dashboard • `.vcli` share bundles.
+
+## Open questions / deferred decisions
+
+- **Template matching backend.** `imageproc` NCC is the default; `opencv` crate is a fallback if perf or robustness demands.
+- **Input backend on macOS.** `core-graphics` events vs `enigo` — decide at implementation time based on which gives cleaner modifier-key + international-keyboard behavior.
+- **VLM model choice.** Decided at v0.3 entry.
+
+## Appendix — decision log
+
+| Decision | Choice | Section |
+|---|---|---|
+| Language | Rust (workspace) | Architecture |
+| Platform v0 | macOS; trait abstractions for later Windows | Architecture |
+| Canonical demo | YouTube ad skipper | v0 scope |
+| DSL format | JSON | DSL |
+| DSL shape | Named predicates + watches + body + triggers | DSL |
+| Expression language | Dotted-path references only | DSL |
+| Variables / conditionals in v0 | None | DSL |
+| Perception tiers v0 | Tier 1 (`color_at`, `pixel_diff`, logical, `elapsed`) + Tier 2 (`template`) | Perception |
+| Scheduler model | Sync 10fps tick, rayon for parallel eval, tokio only for IPC | Runtime |
+| Arbitration on conflict | Drop losers (no re-queue); next tick re-decides | Runtime |
+| Action semantics | Synchronous dispatch; body advances only after confirmation | Runtime |
+| IPC | Unix socket, framed JSON, no auth | IPC |
+| Persistence | SQLite + content-addressed assets + in-memory trace ring | Persistence |
+| Restart policy | `running` → `failed(daemon_restart)`; opt-in `vcli resume` with `body_cursor` | Persistence |
+| Testing | Property assertions + determinism-gated golden traces + DSL fuzz + real-Safari E2E | Testing |
