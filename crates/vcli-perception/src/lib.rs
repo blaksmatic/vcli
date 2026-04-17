@@ -21,3 +21,7 @@ pub mod cache;
 pub mod state;
 
 pub mod frame_view;
+
+pub mod color_at;
+
+pub use color_at::ColorAtEvaluator;
