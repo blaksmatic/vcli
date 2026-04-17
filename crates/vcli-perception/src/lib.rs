@@ -25,3 +25,7 @@ pub mod frame_view;
 pub mod color_at;
 
 pub use color_at::ColorAtEvaluator;
+
+pub mod pixel_diff;
+
+pub use pixel_diff::PixelDiffEvaluator;
