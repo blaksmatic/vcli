@@ -17,3 +17,7 @@ pub use error::{IpcError, IpcResult};
 pub mod socket_path;
 
 pub use socket_path::{default_socket_path, SocketPath};
+
+pub mod frame;
+
+pub use frame::{read_frame, write_frame, MAX_FRAME_LEN};
