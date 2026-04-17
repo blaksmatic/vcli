@@ -12,6 +12,7 @@
 pub mod assets;
 pub mod error;
 pub mod events;
+pub mod gc;
 pub mod migrations;
 pub mod paths;
 pub mod pragmas;
@@ -21,6 +22,7 @@ pub mod traces;
 
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use assets::{AssetHash, PutAssetOutcome};
+pub use gc::{GcReport, RETENTION_DAYS};
 pub use events::StoredEvent;
 pub use resume::ResumeOutcome;
 pub use traces::{TraceKind, TraceRecord};
