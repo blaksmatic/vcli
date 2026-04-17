@@ -38,3 +38,6 @@ pub use watches::validate_watches;
 
 pub mod triggers;
 pub use triggers::validate_trigger;
+
+pub mod hash;
+pub use hash::{compute_predicate_hashes, PredicateHashes};
