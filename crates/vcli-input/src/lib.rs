@@ -25,3 +25,7 @@ pub use kill_switch::{KillSwitch, KillSwitchObserver};
 pub mod sink;
 
 pub use sink::{DragSegment, InputSink};
+
+pub mod mock;
+
+pub use mock::MockInputSink;
