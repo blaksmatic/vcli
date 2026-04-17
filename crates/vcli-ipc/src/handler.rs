@@ -54,15 +54,19 @@ pub trait Handler: Send + Sync + 'static {
 }
 
 /// Tiny test double used by the integration tests.
-#[cfg(test)]
-pub(crate) mod test_double {
+///
+/// Exposed unconditionally so that integration tests (separate compilation
+/// units) can import it. No prod code should use it.
+pub mod test_double {
     use super::*;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use vcli_core::ErrorCode;
 
+    /// In-memory handler that records every op dispatched to it.
     #[derive(Debug, Default, Clone)]
     pub struct FakeHandler {
+        /// Ops received in dispatch order.
         pub received: Arc<Mutex<Vec<RequestOp>>>,
     }
 
