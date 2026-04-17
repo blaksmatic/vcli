@@ -62,3 +62,7 @@ pub use canonical::{canonicalize, predicate_hash, CanonicalError, PredicateHash}
 pub mod events;
 
 pub use events::{Event, EventData};
+
+pub mod error;
+
+pub use error::{ErrorCode, ErrorPayload};
