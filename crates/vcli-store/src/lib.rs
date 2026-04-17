@@ -9,6 +9,7 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod assets;
 pub mod error;
 pub mod events;
 pub mod migrations;
@@ -19,6 +20,7 @@ pub mod store;
 pub mod traces;
 
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use assets::{AssetHash, PutAssetOutcome};
 pub use events::StoredEvent;
 pub use resume::ResumeOutcome;
 pub use traces::{TraceKind, TraceRecord};
