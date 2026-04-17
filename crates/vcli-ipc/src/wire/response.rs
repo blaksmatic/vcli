@@ -91,3 +91,53 @@ impl Response {
         Self { id, body: ResponseBody::Err { ok: ErrFlag, error } }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcli_core::ErrorCode;
+
+    fn rid() -> RequestId {
+        "12345678-1234-4567-8910-111213141516".parse().unwrap()
+    }
+
+    #[test]
+    fn ok_response_serializes_with_ok_true() {
+        let r = Response::ok(rid(), serde_json::json!({ "program_id": "abc" }));
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(j.contains(r#""ok":true"#), "{j}");
+        assert!(j.contains(r#""program_id":"abc""#), "{j}");
+        assert!(!j.contains("error"));
+        let back: Response = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn err_response_serializes_with_ok_false_and_typed_error() {
+        let r = Response::err(
+            rid(),
+            ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
+        );
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(j.contains(r#""ok":false"#), "{j}");
+        assert!(j.contains(r#""code":"unknown_program""#), "{j}");
+        assert!(!j.contains(r#""result""#), "{j}");
+        let back: Response = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn ok_response_with_null_result_is_valid() {
+        let r = Response::ok(rid(), serde_json::Value::Null);
+        let j = serde_json::to_string(&r).unwrap();
+        let back: Response = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn response_with_ok_flag_mismatch_rejected() {
+        // ok:true paired with error field → must fail deserialization (no matching variant).
+        let bad = r#"{"id":"12345678-1234-4567-8910-111213141516","ok":true,"error":{"code":"internal","message":"x"}}"#;
+        assert!(serde_json::from_str::<Response>(bad).is_err());
+    }
+}
