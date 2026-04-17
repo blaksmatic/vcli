@@ -10,8 +10,11 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod error;
+pub mod migrations;
 pub mod paths;
 pub mod pragmas;
+
+pub use migrations::LATEST_SCHEMA_VERSION;
 
 pub use error::{StoreError, StoreResult};
 pub use paths::{asset_blob_path, assets_root, db_path};
