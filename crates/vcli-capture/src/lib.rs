@@ -10,7 +10,7 @@
 //! coords all live in logical space; the one physical → logical conversion
 //! happens inside this crate.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
