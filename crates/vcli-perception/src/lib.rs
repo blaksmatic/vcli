@@ -34,4 +34,8 @@ pub mod logical;
 
 pub use logical::{AllOfEvaluator, AnyOfEvaluator, NotEvaluator};
 
+pub mod elapsed;
+
+pub use elapsed::ElapsedMsSinceTrueEvaluator;
+
 pub mod perception;
