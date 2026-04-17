@@ -46,3 +46,7 @@ pub use watch::{Lifetime, Watch, WatchWhen};
 pub mod trigger;
 
 pub use trigger::Trigger;
+
+pub mod state;
+
+pub use state::ProgramState;
