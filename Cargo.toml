@@ -4,6 +4,7 @@ members = [
     "crates/vcli-core",
     "crates/vcli-dsl",
     "crates/vcli-ipc",
+    "crates/vcli-perception",
     "crates/vcli-store",
 ]
 
@@ -33,7 +34,13 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
 
+# Added by vcli-perception lane
+dashmap = "6"
+imageproc = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Dev-only
 proptest = "1"
 tempfile = "3"
 tokio-test = "0.4"
+approx = "0.5"

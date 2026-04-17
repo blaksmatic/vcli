@@ -1,0 +1,22 @@
+[package]
+name = "vcli-perception"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Tier-1/Tier-2 predicate evaluators + per-tick cache + cross-tick state for vcli."
+
+[dependencies]
+vcli-core = { path = "../vcli-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+dashmap = { workspace = true }
+imageproc = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+approx = { workspace = true }
