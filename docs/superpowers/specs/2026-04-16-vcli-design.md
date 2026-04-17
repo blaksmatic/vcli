@@ -9,7 +9,7 @@ author: @blaksmatic
 
 ## Summary
 
-**vcli** (visual CLI) is a local, persistent screen-control runtime that AI agents (and humans) command through declarative JSON programs. A daemon loads each program and executes it reactively against live screen state — no agent-in-the-loop on the hot path. Think of it as a small operating system for screen-scoped programs, driven by a Unix-philosophy CLI.
+**vcli** (Vision CLI) is a local, persistent screen-control runtime that AI agents (and humans) command through declarative JSON programs. A daemon loads each program and executes it reactively against live screen state — no agent-in-the-loop on the hot path. Think of it as a small operating system for screen-scoped programs, driven by a Unix-philosophy CLI.
 
 The thesis is the robotics hierarchy: a slow planner (LLM, out of scope for the daemon) emits a reactive program; a fast runtime executes it at frame rate (10fps target) and only calls back to the planner on completion, failure, or novelty. One LLM call per task, not per frame.
 
