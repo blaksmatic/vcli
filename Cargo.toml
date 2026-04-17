@@ -5,6 +5,7 @@ members = [
     "crates/vcli-dsl",
     "crates/vcli-input",
     "crates/vcli-ipc",
+    "crates/vcli-perception",
     "crates/vcli-store",
 ]
 
@@ -39,7 +40,13 @@ core-graphics = { version = "0.24", features = ["highsierra"] }
 core-foundation = "0.10"
 libc = "0.2"
 
+# Added by vcli-perception lane
+dashmap = "6"
+imageproc = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Dev-only
 proptest = "1"
 tempfile = "3"
 tokio-test = "0.4"
+approx = "0.5"
