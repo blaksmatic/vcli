@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::unix::OwnedReadHalf;
 use tokio::net::UnixStream;
 
 use crate::error::{IpcError, IpcResult};
@@ -67,22 +68,27 @@ impl IpcClient {
     ///
     /// # Errors
     /// Transport failures during handshake.
-    pub async fn request_stream(mut self, op: RequestOp) -> IpcResult<ResponseStream> {
+    pub async fn request_stream(self, op: RequestOp) -> IpcResult<ResponseStream> {
         let id = RequestId::new();
         let req = Request { id, op };
+        // Split into owned halves so that the reader can persist across frames.
+        let (read_half, write_half) = self.stream.into_split();
         {
-            let (_r, write_half) = self.stream.split();
             let mut writer = BufWriter::new(write_half);
             write_frame(&mut writer, &req).await?;
             writer.flush().await?;
+            // writer (and write_half) are dropped here — we only need the read side now.
         }
-        Ok(ResponseStream { stream: self.stream, id, done: false })
+        Ok(ResponseStream { reader: BufReader::new(read_half), id, done: false })
     }
 }
 
-/// Stream of `StreamFrame`s from the server. Holds the `UnixStream` until drop.
+/// Stream of `StreamFrame`s from the server. Holds the read half until drop.
+///
+/// The `BufReader` persists across `next_frame()` calls so that any bytes
+/// pre-fetched from the OS buffer are not lost between frames.
 pub struct ResponseStream {
-    stream: UnixStream,
+    reader: BufReader<OwnedReadHalf>,
     id: RequestId,
     done: bool,
 }
@@ -98,9 +104,7 @@ impl ResponseStream {
         if self.done {
             return Ok(None);
         }
-        let (read_half, _w) = self.stream.split();
-        let mut reader = BufReader::new(read_half);
-        let frame: StreamFrame = read_frame(&mut reader).await?;
+        let frame: StreamFrame = read_frame(&mut self.reader).await?;
         if frame.id != self.id {
             return Err(IpcError::SocketSetup(format!(
                 "stream frame id mismatch: req={} got={}",
@@ -114,6 +118,7 @@ impl ResponseStream {
         Ok(Some(frame))
     }
 }
+
 
 #[cfg(test)]
 mod tests {
