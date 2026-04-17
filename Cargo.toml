@@ -2,7 +2,10 @@
 resolver = "2"
 members = [
     "crates/vcli-core",
+    "crates/vcli-dsl",
     "crates/vcli-input",
+    "crates/vcli-ipc",
+    "crates/vcli-store",
 ]
 
 [workspace.package]
@@ -22,11 +25,21 @@ uuid = { version = "1", features = ["v4", "serde"] }
 ryu = "1"
 unicode-normalization = "0.1"
 
-# Dev-only
-proptest = "1"
+# Added by vcli-ipc lane
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+async-trait = "0.1"
+futures-core = "0.3"
+
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
 
 # Platform-specific (used by vcli-input + vcli-capture later)
 core-graphics = { version = "0.24", features = ["highsierra"] }
 core-foundation = "0.10"
 libc = "0.2"
+
+# Dev-only
+proptest = "1"
 tempfile = "3"
+tokio-test = "0.4"
