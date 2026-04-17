@@ -35,3 +35,6 @@ pub use steps::{validate_body_steps, validate_watch_steps};
 
 pub mod watches;
 pub use watches::validate_watches;
+
+pub mod triggers;
+pub use triggers::validate_trigger;
