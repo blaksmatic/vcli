@@ -1,6 +1,6 @@
 //! Low-level accessors that bridge `vcli-core::Frame` (BGRA8 / RGBA8,
 //! possibly with stride padding) to `image::RgbImage` slices used by
-//! `imageproc` and the pixel_diff dHash.
+//! `imageproc` and the `pixel_diff` dHash.
 //!
 //! All evaluators go through this module so the BGRA↔RGB swizzle and the
 //! Frame-bounds-vs-region clipping logic lives in exactly one place.
@@ -21,7 +21,10 @@ pub fn pixel_rgb(frame: &Frame, x: i32, y: i32) -> Result<[u8; 3]> {
     if x < 0 || y < 0 || x >= frame.width() || y >= frame.height() {
         return Err(PerceptionError::RegionOutOfBounds);
     }
+    // Safety: x and y are both non-negative (checked above).
+    #[allow(clippy::cast_sign_loss)]
     let ux = x as usize;
+    #[allow(clippy::cast_sign_loss)]
     let uy = y as usize;
     let bpp = frame.format.bytes_per_pixel();
     let offset = uy.saturating_mul(frame.stride) + ux.saturating_mul(bpp);
@@ -53,12 +56,19 @@ pub fn crop_rgb(frame: &Frame, region_abs: Rect) -> Result<RgbImage> {
     if x1 <= x0 || y1 <= y0 {
         return Err(PerceptionError::RegionOutOfBounds);
     }
+    // w and h are differences of clamped i32 coords, both non-negative.
+    #[allow(clippy::cast_sign_loss)]
     let w = (x1 - x0) as u32;
+    #[allow(clippy::cast_sign_loss)]
     let h = (y1 - y0) as u32;
     let mut out = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(w, h);
     for row in 0..h {
         for col in 0..w {
+            // col and row are u32 from 0..w/h; guaranteed to fit in i32 for
+            // practical frame dimensions (< 2^31 pixels).
+            #[allow(clippy::cast_possible_wrap)]
             let fx = (x0 - fb.x) + col as i32;
+            #[allow(clippy::cast_possible_wrap)]
             let fy = (y0 - fb.y) + row as i32;
             let rgb = pixel_rgb(frame, fx, fy)?;
             out.put_pixel(col, row, Rgb(rgb));
@@ -74,13 +84,21 @@ pub fn crop_rgb(frame: &Frame, region_abs: Rect) -> Result<RgbImage> {
 ///
 /// Propagates `pixel_rgb` errors (unreachable for in-bounds iteration).
 pub fn frame_to_rgb(frame: &Frame) -> Result<RgbImage> {
+    // width() and height() return i32 which are non-negative for valid frames.
+    #[allow(clippy::cast_sign_loss)]
     let w = frame.width() as u32;
+    #[allow(clippy::cast_sign_loss)]
     let h = frame.height() as u32;
     let mut out = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(w, h);
     for y in 0..frame.height() {
         for x in 0..frame.width() {
             let rgb = pixel_rgb(frame, x, y)?;
-            out.put_pixel(x as u32, y as u32, Rgb(rgb));
+            // x and y are non-negative (0..positive_i32).
+            #[allow(clippy::cast_sign_loss)]
+            let px = x as u32;
+            #[allow(clippy::cast_sign_loss)]
+            let py = y as u32;
+            out.put_pixel(px, py, Rgb(rgb));
         }
     }
     Ok(out)
@@ -100,12 +118,17 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let off = y * stride + x * 4;
-                pixels[off] = (x + y) as u8; // B
-                pixels[off + 1] = (20 * y) as u8; // G
-                pixels[off + 2] = (10 * x) as u8; // R
+                // Test values are small (x<4, y<2) so casts are safe.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    pixels[off] = (x + y) as u8; // B
+                    pixels[off + 1] = (20 * y) as u8; // G
+                    pixels[off + 2] = (10 * x) as u8; // R
+                }
                 pixels[off + 3] = 255;
             }
         }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         Frame::new(
             FrameFormat::Bgra8,
             Rect {

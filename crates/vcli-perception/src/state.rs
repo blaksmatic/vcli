@@ -2,7 +2,7 @@
 //! per-tick. `PerceptionState` carries:
 //!
 //! - prior-frame snapshots keyed by predicate hash, for `pixel_diff`
-//! - first-true timestamps keyed by (program_id, predicate_name) pair,
+//! - first-true timestamps keyed by (`program_id`, `predicate_name`) pair,
 //!   for `elapsed_ms_since_true`
 //!
 //! Interior mutability only — every public method takes `&self`.
@@ -52,7 +52,7 @@ impl PerceptionState {
         Self::default()
     }
 
-    /// Read the most recent snapshot for a pixel_diff predicate hash.
+    /// Read the most recent snapshot for a `pixel_diff` predicate hash.
     #[must_use]
     pub fn prior_snapshot(&self, hash: &PredicateHash) -> Option<PriorSnapshot> {
         self.prior_snapshots.get(hash).map(|s| s.clone())

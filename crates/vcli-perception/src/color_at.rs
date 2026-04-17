@@ -18,6 +18,7 @@ impl ColorAtEvaluator {
     /// # Errors
     ///
     /// Propagates `RegionOutOfBounds` if the point is outside the frame.
+    #[allow(clippy::many_single_char_names)]
     pub fn sample(frame: &Frame, x: i32, y: i32, target: Rgb, tolerance: u16) -> Result<bool> {
         let [r, g, b] = pixel_rgb(frame, x, y)?;
         let [tr, tg, tb] = target.0;

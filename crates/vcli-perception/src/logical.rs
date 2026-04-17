@@ -17,7 +17,7 @@ const MAX_RECURSION_DEPTH: u32 = 32;
 
 /// Look up a named predicate, evaluate it through the correct kind's
 /// evaluator, memoize in the cache, and return the result. Used by
-/// logical + elapsed_ms_since_true evaluators.
+/// logical + `elapsed_ms_since_true` evaluators.
 ///
 /// # Errors
 ///
@@ -63,11 +63,9 @@ pub(crate) fn evaluate_named_with_depth(
 }
 
 fn hash_predicate(p: &Predicate) -> Result<PredicateHash> {
-    let v = serde_json::to_value(p).map_err(|e| {
-        PerceptionError::AssetDecode(format!("serialize predicate for hash: {e}"))
-    })?;
-    predicate_hash(&v)
-        .map_err(|e| PerceptionError::AssetDecode(format!("hash predicate: {e}")))
+    let v = serde_json::to_value(p)
+        .map_err(|e| PerceptionError::AssetDecode(format!("serialize predicate for hash: {e}")))?;
+    predicate_hash(&v).map_err(|e| PerceptionError::AssetDecode(format!("hash predicate: {e}")))
 }
 
 fn eval_all_of(of: &[String], ctx: &EvalCtx<'_>, depth: u32) -> Result<PredicateResult> {

@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use vcli_core::clock::UnixMs;
 use vcli_core::predicate::PredicateKind;
-use vcli_core::{
-    predicate_hash, Frame, Predicate, PredicateHash, PredicateResult, ProgramId,
-};
+use vcli_core::{predicate_hash, Frame, Predicate, PredicateHash, PredicateResult, ProgramId};
 
 use crate::cache::PredicateCache;
 use crate::color_at::ColorAtEvaluator;
@@ -111,11 +109,9 @@ impl Default for Perception {
 
 /// Hash any predicate via the canonical JSON pipeline in `vcli-core`.
 pub(crate) fn hash_predicate(p: &Predicate) -> Result<PredicateHash> {
-    let v = serde_json::to_value(p).map_err(|e| {
-        PerceptionError::AssetDecode(format!("serialize predicate for hash: {e}"))
-    })?;
-    predicate_hash(&v)
-        .map_err(|e| PerceptionError::AssetDecode(format!("hash predicate: {e}")))
+    let v = serde_json::to_value(p)
+        .map_err(|e| PerceptionError::AssetDecode(format!("serialize predicate for hash: {e}")))?;
+    predicate_hash(&v).map_err(|e| PerceptionError::AssetDecode(format!("hash predicate: {e}")))
 }
 
 /// Dispatch a predicate to its evaluator. Internal — logical evaluators
@@ -252,13 +248,11 @@ mod tests {
         assert_eq!(p.cache().len(), 0);
         // State is preserved — recording a snapshot then clearing cache
         // keeps the snapshot accessible.
-        let h = super::hash_predicate(
-            &PredicateKind::ColorAt {
-                point: Point { x: 0, y: 0 },
-                rgb: Rgb([255, 0, 0]),
-                tolerance: 0,
-            },
-        )
+        let h = super::hash_predicate(&PredicateKind::ColorAt {
+            point: Point { x: 0, y: 0 },
+            rgb: Rgb([255, 0, 0]),
+            tolerance: 0,
+        })
         .unwrap();
         p.state().record_snapshot(
             h.clone(),

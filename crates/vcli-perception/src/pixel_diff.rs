@@ -95,9 +95,8 @@ impl Evaluator for PixelDiffEvaluator {
             PerceptionError::AssetDecode(format!("canonicalize pixel_diff key: {e}"))
         })?;
         // SHA over canonical bytes via vcli_core::predicate_hash on the same value.
-        let state_key = vcli_core::predicate_hash(&key_value).map_err(|e| {
-            PerceptionError::AssetDecode(format!("hash pixel_diff key: {e}"))
-        })?;
+        let state_key = vcli_core::predicate_hash(&key_value)
+            .map_err(|e| PerceptionError::AssetDecode(format!("hash pixel_diff key: {e}")))?;
         let _ = key_bytes; // Retained for future diagnostics; canonicalize call asserts stability.
 
         // Compute current dHash of the region.
@@ -164,13 +163,16 @@ mod tests {
                 pixels[off + 3] = 255;
             }
         }
+        // w and h are 32 — safe to cast to i32.
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+        let (wi, hi) = (w as i32, h as i32);
         Frame::new(
             FrameFormat::Rgba8,
             Rect {
                 x: 0,
                 y: 0,
-                w: w as i32,
-                h: h as i32,
+                w: wi,
+                h: hi,
             },
             stride,
             Arc::from(pixels),

@@ -2,7 +2,7 @@
 //!
 //! Per Decision A, `evaluate` takes `&self` so multiple evaluators can run
 //! concurrently under `rayon::par_iter` with a shared `DashMap` cache.
-//! Evaluators that need mutable state (pixel_diff prior frames, elapsed
+//! Evaluators that need mutable state (`pixel_diff` prior frames, elapsed
 //! first-true timestamps) push that state into `PerceptionState`, which
 //! uses interior mutability (`DashMap` / `Mutex`) — never `&mut self`.
 
@@ -29,7 +29,7 @@ pub struct EvalCtx<'a> {
     /// Cross-tick state (interior mutability).
     pub state: &'a PerceptionState,
     /// Named predicate graph for this program. Logical and
-    /// elapsed_ms_since_true evaluators look up dependencies here.
+    /// `elapsed_ms_since_true` evaluators look up dependencies here.
     pub predicates: &'a BTreeMap<String, Predicate>,
     /// Asset bytes, keyed by sha256 hex (no `sha256:` prefix). Populated
     /// by the daemon submit module before handing off to Perception.

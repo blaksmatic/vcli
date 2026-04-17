@@ -118,7 +118,9 @@ impl Evaluator for TemplateEvaluator {
         }
 
         // Translate the match location from haystack-local to absolute
-        // screen coordinates.
+        // screen coordinates. best_loc and template dimensions are u32 from
+        // imageproc; practical frame dimensions fit safely in i32.
+        #[allow(clippy::cast_possible_wrap)]
         let bbox = Rect {
             x: region_origin.0 + best_loc.0 as i32,
             y: region_origin.1 + best_loc.1 as i32,
@@ -170,13 +172,16 @@ mod tests {
                 pixels[off + 3] = 255;
             }
         }
+        // w=64, h=64 — safe to cast to i32.
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+        let (wi, hi) = (w as i32, h as i32);
         Frame::new(
             FrameFormat::Rgba8,
             Rect {
                 x: 0,
                 y: 0,
-                w: w as i32,
-                h: h as i32,
+                w: wi,
+                h: hi,
             },
             stride,
             Arc::from(pixels),
@@ -283,19 +288,23 @@ mod tests {
     fn template_missing_in_scene_is_falsy() {
         let frame = scene_with_box(); // black-box-on-white
         let template_bytes = template_png_white_16x8(); // all-white template never correlates high
-        // Actually: NCC of all-white against a region with all-white pixels
-        // can return 1.0 trivially, BUT find_extremes on constant images
-        // returns NaN due to zero variance — imageproc guards this by
-        // returning 0. Prefer using confidence 0.99 + a scene whose
-        // whitespace regions still won't exceed it. Simpler: use a
-        // distinctive template instead. Use a 32×32 gradient template
-        // that cannot be found in a 64x64 solid scene.
+                                                        // Actually: NCC of all-white against a region with all-white pixels
+                                                        // can return 1.0 trivially, BUT find_extremes on constant images
+                                                        // returns NaN due to zero variance — imageproc guards this by
+                                                        // returning 0. Prefer using confidence 0.99 + a scene whose
+                                                        // whitespace regions still won't exceed it. Simpler: use a
+                                                        // distinctive template instead. Use a 32×32 gradient template
+                                                        // that cannot be found in a 64x64 solid scene.
         let _ = template_bytes; // Unused: we build a different template below.
 
         let mut grad: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(32, 32);
         for y in 0..32u32 {
             for x in 0..32u32 {
-                grad.put_pixel(x, y, Rgb([((x * 8) % 255) as u8, ((y * 8) % 255) as u8, 128]));
+                grad.put_pixel(
+                    x,
+                    y,
+                    Rgb([((x * 8) % 255) as u8, ((y * 8) % 255) as u8, 128]),
+                );
             }
         }
         let mut grad_bytes: Vec<u8> = Vec::new();
@@ -341,8 +350,7 @@ mod tests {
     fn template_larger_than_haystack_is_falsy() {
         let frame = scene_with_box();
         // Build a template larger than the search region.
-        let big: ImageBuffer<Luma<u8>, Vec<u8>> =
-            ImageBuffer::from_pixel(200, 200, Luma([0]));
+        let big: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_pixel(200, 200, Luma([0]));
         let mut bytes: Vec<u8> = Vec::new();
         big.write_to(
             &mut std::io::Cursor::new(&mut bytes),
