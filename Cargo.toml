@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vcli-core",
+    "crates/vcli-capture",
     "crates/vcli-dsl",
     "crates/vcli-ipc",
     "crates/vcli-perception",
@@ -33,6 +34,12 @@ futures-core = "0.3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
+
+tracing = "0.1"
+
+# Platform-specific, referenced from vcli-capture only. Declaring here so
+# downstream crates that later depend on vcli-capture don't re-select versions.
+screencapturekit = "1"
 
 # Added by vcli-perception lane
 dashmap = "6"
