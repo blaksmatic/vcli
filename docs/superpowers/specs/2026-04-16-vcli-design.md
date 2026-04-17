@@ -11,7 +11,7 @@ author: @blaksmatic
 
 **vcli** (Vision CLI) is a local, persistent screen-control runtime that AI agents (and humans) command through declarative JSON programs. A daemon loads each program and executes it reactively against live screen state — no agent-in-the-loop on the hot path. Think of it as a small operating system for screen-scoped programs, driven by a Unix-philosophy CLI.
 
-The thesis is the robotics hierarchy: a slow planner (LLM, out of scope for the daemon) emits a reactive program; a fast runtime executes it at frame rate (10fps target) and only calls back to the planner on completion, failure, or novelty. One LLM call per task, not per frame.
+The thesis is the robotics hierarchy: a slow planner (LLM, out of scope for the daemon) emits a reactive program; a fast runtime executes it at frame rate (10fps target) and only calls back to the planner on completion, failure, or explicit novelty. One LLM call per task, not per frame.
 
 This is a personal open-source lab project. Goals are craft, learning, and a portfolio-worthy artifact. Local-first, no data leaves the machine.
 
@@ -44,7 +44,7 @@ This is a personal open-source lab project. Goals are craft, learning, and a por
 - 10fps scheduler with shared capture, shared predicate cache, action arbitration
 - Program lifecycle: pending → waiting → running → blocked → completed | failed | cancelled
 - SQLite-backed program store, content-addressed asset store, in-memory ring-buffer trace
-- `vcli resume` for post-restart continuation with body-cursor checkpointing
+- `vcli resume` for post-restart continuation of resumable programs with body-cursor checkpointing
 - Unit tests, scenario tests (property assertions + determinism-gated golden trace diffs), DSL fuzz, real-Safari+YouTube E2E demo (gated behind `--features e2e`)
 
 **Out (deferred to later phases):**
@@ -164,13 +164,20 @@ A predicate evaluation returns `PredicateResult { truthy: bool, match: Option<Ma
 {
   "when": "skip_visible",                      // predicate name or inline object
   "do":   [ /* Step */ ],
+  "mode": "rising_edge",                       // rising_edge | while_true
   "throttle_ms": 500,
-  "lifetime": { "kind": "persistent" }         // persistent | one_shot |
+  "lifetime": { "kind": "persistent" },        // persistent | one_shot |
                                                // until_predicate(name) | timeout_ms(N)
+  "on_fire": { "emit": "<event_name>" }        // optional custom event after successful firing
 }
 ```
 
-Watches fire when `when` transitions false→true (tracked per-(program, watch)), respecting `throttle_ms`. `one_shot` fires exactly once; `until_predicate` runs persistently until the named predicate is truthy, then is removed.
+Watches are tracked per-(program, watch) and become eligible according to `mode`:
+
+- `rising_edge` (default) — fires when `when` transitions false→true, respecting `throttle_ms`.
+- `while_true` — becomes eligible whenever `when` is truthy and `throttle_ms` has elapsed since the last completed or deferred attempt. Use for sticky UI affordances where a dropped click should retry without requiring the screen to go false first.
+
+A watch firing is counted only after its `do` sequence completes successfully. `one_shot` fires exactly once; `until_predicate` runs persistently until the named predicate is truthy, then is removed. On successful firing the daemon emits `watch.fired` and, if present, the custom event named by `on_fire.emit`.
 
 ### Step (body and `watch.do` share the vocabulary)
 
@@ -192,6 +199,21 @@ Watches fire when `when` transitions false→true (tracked per-(program, watch))
 { "kind": "subprogram", "ref": "<program_id>" }
 ```
 
+### Input postconditions
+
+Any input action may optionally require a visual postcondition:
+
+```jsonc
+"postcondition": { "predicate": "skip_gone", "within_ms": 1500, "on_timeout": "novelty" }
+// on_timeout = fail | continue | novelty
+```
+
+`Input::dispatch` success only means the OS accepted the event. If `postcondition` is present, the step is not considered successful until the predicate becomes truthy within `within_ms`.
+
+- `fail` — transition to `program.failed`
+- `continue` — continue execution without a visual success guarantee
+- `novelty` — emit `program.novelty` and then fail the program with reason `novelty_timeout`
+
 ### Expression language
 
 Dotted paths only. No arithmetic, no conditionals in v0.
@@ -209,7 +231,7 @@ References to predicates without a match produce a step error (`program.failed` 
 
 `vcli-dsl` rejects before the scheduler ever sees a program:
 
-- Unknown predicate name referenced from watch, step, region, or expression
+- Unknown predicate name referenced from watch, step, step postcondition, region, or expression
 - Cycle in `relative_to` predicate graph
 - Unknown action or predicate `kind`
 - Missing `image` asset (not in asset store and not a readable file path)
@@ -232,18 +254,24 @@ Errors include JSON path info: `{ "code": "invalid_program", "message": "unknown
       "confidence": 0.9,
       "region": { "kind": "window", "app": "Safari", "title_contains": "YouTube" },
       "throttle_ms": 200
-    }
+    },
+    "skip_gone": { "kind": "not", "of": "skip_visible" }
   },
   "watches": [
     {
       "when": "skip_visible",
-      "do":   [{ "kind": "click", "at": "$skip_visible.match.center" }],
+      "mode": "while_true",
+      "do":   [{
+        "kind": "click",
+        "at": "$skip_visible.match.center",
+        "postcondition": { "predicate": "skip_gone", "within_ms": 1500, "on_timeout": "novelty" }
+      }],
       "throttle_ms": 500,
-      "lifetime": { "kind": "persistent" }
+      "lifetime": { "kind": "persistent" },
+      "on_fire": { "emit": "ad_skipped" }
     }
   ],
-  "body": [],
-  "on_complete": { "emit": "ad_skipped" }
+  "body": []
 }
 ```
 
@@ -275,6 +303,7 @@ Errors include JSON path info: `{ "code": "invalid_program", "message": "unknown
 
 - **One vocabulary, two contexts.** `watch.do` and `body` use the same `Step` type. Only `body` gets `wait_for` / `assert` / `sleep_ms`.
 - **Predicates are first-class and named.** Enables structural dedup across programs.
+- **Progress and completion are distinct.** Pure-watch programs emit progress via `watch.on_fire.emit`; `on_complete` remains terminal-only.
 - **No program-level variables in v0.** Stateful semantics are encoded via predicates (e.g., `elapsed_ms_since_true`). Avoids imperative-in-a-reactive-language confusion. Variables can be added later without breaking existing programs.
 - **No body conditionals in v0.** `wait_for` + `assert` + watches cover the v0 demo programs. `if`/`else` added only when a concrete program needs them.
 - **Extension slots reserved** in the schema (e.g., `subprogram`) so later versions add features without schema churn.
@@ -288,12 +317,18 @@ loop {
   tick_start = now()
   frame      = capture.grab()                     // one capture, shared across programs
 
-  active_preds = scheduler.dedup_predicates(running_programs)
+  active_preds = scheduler.dedup_predicates(
+                   running_programs + waiting_predicate_trigger_programs
+                 )
 
   // Tier 1: evaluate cheap predicates every tick
   // Tier 2: evaluate throttled predicates if last_eval + throttle_ms <= now
   // Tier 3 (post-v0): never evaluated inline — cache read only
   perception_results = perception.evaluate(&frame, &active_preds, cache.as_mut())
+
+  for program in waiting_predicate_trigger_programs {
+    program.maybe_fire_trigger(&perception_results, &clock)
+  }
 
   for program in running_programs {
     program.advance(&perception_results, &clock)   // emits zero or more pending actions
@@ -327,8 +362,9 @@ struct CacheEntry {
 }
 ```
 
-- **Key = content hash** of canonical-serialized predicate AST (names stripped; asset paths resolved to content hashes first). Two programs with structurally identical predicates share a cache slot and evaluate once per tick.
-- **Refcount** on program entering `running`; decrement on leaving. Evicted when zero on the next tick.
+- **Key = content hash** of the canonical-serialized, fully-resolved predicate subgraph (names stripped; asset paths resolved to content hashes first). `relative_to` and logical predicates hash over their canonicalized dependencies, not just their local node.
+- **Program-local temporal predicates are never cross-program deduped.** `elapsed_ms_since_true` layers program-local transition timing on top of a shared child predicate result.
+- **Refcount** on program entering a predicate-evaluated state (`running`, plus `waiting` for `on_predicate` triggers); decrement on leaving. Evicted when zero on the next tick.
 - **Throttle check lives in the cache**, not in programs — consistent semantics regardless of reference count.
 
 ### Program state machine
@@ -345,6 +381,7 @@ struct CacheEntry {
                                                       │
                                                       ├── body step errors / assert fails → failed
                                                       ├── wait_for timeout (on_timeout=fail) → failed
+                                                      ├── input postcondition timeout (on_timeout=novelty) → failed
                                                       ├── program-level timeout_ms         → failed
                                                       ├── cancel request                   → cancelled
                                                       ├── body complete (non-empty body)   → completed
@@ -357,9 +394,9 @@ struct CacheEntry {
 
 `blocked` is reserved for v0 but no feature transitions into it. Allows later features (external-event awaiting) without schema migration.
 
-**Pure-watches programs.** A program with an empty `body` has no natural completion — it stays `running` until cancelled, times out via program-level `timeout_ms`, or an `until_predicate`-lifetimed watch's guard becomes truthy and that was the only remaining watch (no remaining active watches = completed). The YT ad skipper has `timeout_ms: null` and a `persistent` watch, so it runs until cancelled — that's the intended behavior.
+**Pure-watches programs.** A program with an empty `body` has no natural completion — it stays `running` until cancelled, times out via program-level `timeout_ms`, or an `until_predicate`-lifetimed watch's guard becomes truthy and that was the only remaining watch (no remaining active watches = completed). Pure-watch programs still emit progress through `watch.fired` and optional `watch.on_fire.emit` custom events. The YT ad skipper has `timeout_ms: null` and a `persistent` watch, so it runs until cancelled — that's the intended behavior.
 
-**`on_complete` / `on_fail` are event emitters, not transition triggers.** When a program transitions to `completed` or `failed` for any reason above, the daemon fires `program.completed` / `program.failed` system events, and *additionally* emits the optional custom event name specified in `on_complete.emit` / `on_fail.emit`. Subscribers can listen to either form.
+**`on_complete` / `on_fail` are event emitters, not transition triggers.** When a program transitions to `completed` or `failed` for any reason above, the daemon fires `program.completed` / `program.failed` system events, and *additionally* emits the optional custom event name specified in `on_complete.emit` / `on_fail.emit`. `watch.on_fire.emit` is the non-terminal counterpart for long-running reactive programs.
 
 Transitions are atomic within a tick and emit `program.state_changed { from, to, reason }`.
 
@@ -370,25 +407,25 @@ At step 6 of the tick loop the arbiter resolves pending actions from all program
 1. **Mouse exclusivity.** At most one mouse action (move, click, scroll) per tick. Highest-priority pending action wins; ties broken by earliest submission time, then `program_id` for determinism.
 2. **Keyboard exclusivity.** At most one keyboard action (type, key) per tick. Same resolution.
 3. **Mouse + keyboard can coexist** in the same tick.
-4. **Arbitration losers drop.** No re-queue. The next tick's fresh predicate evaluation decides whether to re-fire. Losers emit `action.deferred { program_id, reason: "conflict_with": <other_program_id> }` to the trace.
+4. **No stale re-queue.** Arbitration losers are not carried as pending input objects across ticks. Body steps remain at their current cursor and re-offer the action on the next tick. Watch firings do not count as fired; `rising_edge` watches wait for the next false→true transition, while `while_true` watches may retry after `throttle_ms`. Losers emit `action.deferred { program_id, reason: "conflict_with": <other_program_id> }` to the trace.
 
 ### Action confirmation
 
-`Input::dispatch` returns `Result<(), InputError>` synchronously (microseconds for OS-level confirmation — not visual confirmation). Body steps advance the program counter only after dispatch confirms. Watch-triggered actions are counted as fired only after dispatch confirms. Body cursor is written to SQLite on each confirmation (see Persistence).
+`Input::dispatch` returns `Result<(), InputError>` synchronously (microseconds for OS-level confirmation — not visual confirmation). If an input step has no `postcondition`, dispatch confirmation is success. If it has a `postcondition`, body steps advance and watch-triggered actions are counted as fired only after the postcondition becomes truthy within `within_ms`. `on_timeout=fail` transitions to `failed`; `on_timeout=continue` advances without a visual success guarantee; `on_timeout=novelty` emits `program.novelty` and then fails the program with reason `novelty_timeout`. Body cursor is written to SQLite only after a step is resolved.
 
 ### Watch lifetimes
 
 | Lifetime | Behavior |
 |---|---|
-| `one_shot` | Fires once when `when` transitions false→true; removed for this program run. |
-| `persistent` | Fires every false→true transition, respecting `throttle_ms`. |
+| `one_shot` | Fires once on its first eligible firing, then is removed for this program run. |
+| `persistent` | Remains active until program end; firing eligibility is determined by `mode` and `throttle_ms`. |
 | `until_predicate(name)` | Persistent until the named predicate becomes truthy; then removed. |
 | `timeout_ms(N)` | Persistent until N ms after program started; then removed. |
 
 ### Trigger evaluation (v0)
 
 - `on_submit` — fires immediately when daemon is ready.
-- `on_predicate` — program stays `waiting`; runtime evaluates the trigger predicate every tick until truthy, then transitions to `running`.
+- `on_predicate` — program stays `waiting`; runtime evaluates the trigger predicate (and its dependencies) every tick until truthy, then transitions to `running`.
 - `on_schedule` — cron-ish expression, checked once per tick (v0.1 deferral).
 - `manual` — stays in `waiting` until `vcli start <id>`.
 
@@ -440,7 +477,7 @@ Tier 1 runs inline on the tick thread. Tier 2 fans out to `rayon` across unique 
 
 ### `elapsed_ms_since_true`
 
-Per-(program, predicate) state (last transition time) lives on the program's runtime state, not in the shared cache — it's program-local. Microsecond cost.
+Per-(program, predicate) state (last transition time) lives on the program's runtime state, not in the shared cache — it's program-local. The referenced child predicate may still be shared through `PerceptionCache`; only the elapsed-time wrapper is local. Microsecond cost.
 
 ### Window region resolution (macOS v0)
 
@@ -501,10 +538,11 @@ Length-prefixed frames: `u32` big-endian length, then UTF-8 JSON. Binary-safe, d
 ```
 program.submitted            { program_id, name }
 program.state_changed        { program_id, from, to, reason }
+program.novelty             { program_id, reason, step?, predicate? }
 program.completed            { program_id, emit? }
 program.failed               { program_id, reason, step?, emit? }
 program.resumed              { program_id, from_step }
-watch.fired                  { program_id, watch_index, predicate }
+watch.fired                  { program_id, watch_index, predicate, emit? }
 action.dispatched            { program_id, step, target? }
 action.deferred              { program_id, step, reason }
 tick.frame_skipped           { reason }
@@ -519,8 +557,10 @@ Per-tick predicate evaluations are written to the in-memory trace but **not** br
 - `invalid_program` — DSL validation failure; accompanied by JSON path
 - `unknown_program`
 - `bad_state_transition` — e.g., `cancel` on a completed program
+- `not_resumable` — resume requested for a program whose semantics cannot be recovered from `body_cursor`
 - `permission_denied` — macOS Accessibility or Screen Recording not granted
 - `capture_failed`
+- `novelty_timeout` — a step postcondition did not become true before its deadline
 - `daemon_busy`
 - `internal` — logged server-side with correlation id
 
@@ -532,7 +572,7 @@ vcli list [--state STATE]               # tabular list of programs
 vcli status <program_id>                # detailed status
 vcli cancel <program_id>                # running → cancelled; idempotent
 vcli start <program_id>                 # fires a manual trigger; waiting → running
-vcli resume <program_id> [--from-start] # continues after daemon_restart failure
+vcli resume <program_id> [--from-start] # continues after daemon_restart for resumable programs only
 
 vcli logs <program_id> [--follow]       # streams program-scoped events
 vcli events [--follow]                  # streams all events (firehose)
@@ -647,9 +687,17 @@ On daemon startup:
 
 ### Resume
 
-`vcli resume <program_id>` transitions a program that failed with `daemon_restart` back into `running`, starting at `body_cursor`. Watches always restart fresh. `--from-start` ignores the cursor and re-runs the body from index 0. Emits `program.resumed { from_step }`.
+`vcli resume <program_id>` is intentionally narrow in v0. It is accepted only for programs whose semantics are recoverable from `source_json`, current screen state, and `body_cursor` alone:
 
-Edge case: if `body_cursor == len(body)` at failure time, resume re-enters `running` with body complete — behaves as a pure-watches program from that point.
+- no watches
+- no `elapsed_ms_since_true`
+- no input step whose postcondition was still unresolved at crash time
+
+Other programs fail fast with `not_resumable` and should be restarted from scratch.
+
+For resumable programs, `vcli resume <program_id>` transitions a program that failed with `daemon_restart` back into `running`, starting at `body_cursor`. `--from-start` ignores the cursor and re-runs the body from index 0. Emits `program.resumed { from_step }`.
+
+Edge case: if `body_cursor == len(body)` at failure time, resume re-enters `running` with body complete and immediately transitions to `completed` on the next tick.
 
 ### Graceful shutdown
 
@@ -701,16 +749,15 @@ let mut scenario = Scenario::new()
     .with_clock(TestClock::new("2026-01-01T00:00:00Z"))
     .with_program(include_str!("fixtures/yt_ad_skipper.json"));
 
-scenario.run_until_state(ProgramState::Completed, Duration::secs(30))?;
+scenario.run_until_event("ad_skipped", Duration::secs(30))?;
 
-assert_eq!(scenario.action_count(ActionKind::Click), 3);
-assert_eq!(scenario.program_state(pid), ProgramState::Completed);
+assert_eq!(scenario.program_state(pid), ProgramState::Running);
 assert_trace_matches!(scenario.trace(), "fixtures/yt_ad_skipper.trace.jsonl");  // golden
 ```
 
 - **Property assertions by default** (counts, final states, absence of deferreds).
 - **Golden trace diffs** kept only for fully-deterministic scenarios (mock capture + test clock + mock input). `cargo test -- --update-goldens` regenerates them when an intentional change lands.
-- **Every v0 feature has a scenario.** One-shot / persistent / `until_predicate` / `timeout_ms` watches; body sequencing; `wait_for` timeout; `assert` failure; action conflict between two programs; predicate cache dedup; `elapsed_ms_since_true`; daemon restart produces `failed(daemon_restart)`; resume recovers at `body_cursor`; `--from-start` resume.
+- **Every v0 feature has a scenario.** One-shot / persistent / `until_predicate` / `timeout_ms` watches; `while_true` retry behavior; body sequencing; `wait_for` timeout; `assert` failure; input postcondition success vs `novelty_timeout`; action conflict between two programs; predicate cache dedup; `elapsed_ms_since_true`; daemon restart produces `failed(daemon_restart)`; resumable-program recovery at `body_cursor`; `--from-start` resume.
 
 ### Layer 3 — E2E on real hardware
 
@@ -718,8 +765,9 @@ One canonical integration test, gated behind `cargo test --features e2e`:
 
 - Opens a Safari tab on real YouTube (user-navigated; not scripted), loads a video with a pre-roll ad.
 - Submits the YT ad skipper program.
-- Watches `events --follow` for `ad_skipped`.
+- Watches `events --follow` for `ad_skipped` emitted by `watch.on_fire.emit`.
 - Asserts the ad was actually dismissed via pixel-diff on the video region.
+- Cancels the still-running program.
 
 Property assertions only (no golden). README documents that this can flake on YouTube's UI/AB-test changes and the template asset may need updating — that's the whole point: the system is tracking a real moving target.
 
@@ -794,3 +842,356 @@ Subprogram composition • DirectInput games (Interception) • multi-display �
 | Persistence | SQLite + content-addressed assets + in-memory trace ring | Persistence |
 | Restart policy | `running` → `failed(daemon_restart)`; opt-in `vcli resume` with `body_cursor` | Persistence |
 | Testing | Property assertions + determinism-gated golden traces + DSL fuzz + real-Safari E2E | Testing |
+
+## Review decisions — 2026-04-16 (plan-eng-review)
+
+These 27 decisions from the 2026-04-16 engineering review update the spec above. When sections conflict, this appendix wins. Inline edits to the prose will happen during implementation; this appendix is the authoritative delta.
+
+### Distribution (added to v0 scope)
+
+- **0A.** Full v0 distribution: `launchd` plist + `vcli daemon install` command; GitHub Actions release workflow building **signed + notarized** macOS arm64/x86_64 binaries; Homebrew tap formula at `blaksmatic/homebrew-tap`; README quickstart.
+
+### Architecture
+
+- **1.1.** `vcli-core::canonical_json` module defines canonical form: object keys sorted lexicographically, numbers via `ryu`, UTF-8 NFC, no whitespace. `PredicateHash` and `source_json` both use canonical form. Round-trip tests mandatory.
+- **1.2.** Daemon opens its IPC socket **only after** SQLite is migrated AND tick loop is running AND `daemon.started` has emitted. `vcli daemon start` blocks until the socket exists (10s timeout + clear error). An un-ready daemon does not answer `vcli health` — the socket simply doesn't exist yet.
+- **1.3.** Predicate dependencies (region `relative_to` + logical composition) merge into one `PredicateGraph` at submit time. Single topological sort. Single cycle check. Unified evaluation walks leaves-first, memoizing results into `PerceptionCache`.
+- **1.4.** macOS capture uses `screencapturekit-rs` (modern Apple API) — drop the legacy `core-graphics` `CGWindowListCreateImage` path. Spec line in §Perception pipeline → Window region resolution is corrected accordingly.
+- **1.5.** Programs gain an optional `priority: integer` field (default 0). Arbiter tiebreak: priority desc → submission-time asc → program_id. No per-step priority.
+- **1.6.** `Clock` trait moves from `vcli-runtime` to `vcli-core`. Every time-reading site (scheduler, perception cache throttle, `elapsed_ms_since_true`) takes `&dyn Clock`. `TestClock` deterministically drives the entire system.
+- **1.7.** Event bus = per-client `tokio::sync::broadcast` channel, capacity 1024. Overflow → drop oldest + emit `stream.dropped { count, since }` so clients know they missed events. Terminal events (`program.completed`, `program.failed`) **also** persist in SQLite `events` table; clients can reconcile by re-querying on reconnect.
+- **1.8.** Window geometry cache invalidates on macOS AX `kAXWindowMovedNotification` + `kAXWindowResizedNotification` per tracked window. 500ms TTL stays as belt-and-suspenders fallback.
+- **1.9.** Memory bounds made concrete and enforced: template asset LRU = 128 decoded images (~64MB worst case), trace ring = 100k global + 10k per program. Current + peak exposed via `vcli health`.
+- **1.10.** Five new ASCII diagrams (below) added to the spec.
+
+### Code quality
+
+- **2.1.** Every library crate defines its `Error` enum via `thiserror`. Both binaries (`vcli-daemon`, `vcli-cli`) use `anyhow::Result` at the top level. IPC layer maps library errors to stable codes.
+- **2.2.** DSL error shape: `{code, message, path, line, column, span_len}`. Unknown names (predicate, region `kind`, action `kind`) get a Levenshtein-1 did-you-mean. CLI pretty-printer highlights the offending span with carets.
+- **2.3.** `subprogram` kind removed entirely from the DSL. Not reserved, not schema-valid. Will be added in v0.6 via version bump (tagged enum variants are backward-compatible additions).
+- **2.4.** On `vcli resume` at `body_cursor = N`, runtime re-evaluates step N-1's postcondition/assert/wait_for. If no longer truthy, fail with `resume_precondition_failed` so the caller can decide (restart from start or give up). Guarantees no silent step-skip on stale screen.
+- **2.5.** Socket path resolution: macOS → `$TMPDIR/vcli-$UID.sock`. Linux → `$XDG_RUNTIME_DIR/vcli.sock` → `/run/user/$UID/vcli.sock` → `/tmp/vcli-$UID.sock` fallback chain.
+
+### Testing
+
+- **3.1.** Full CI in `.github/workflows/ci.yml`: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all` on ubuntu-latest + macos-latest (excluding `--features e2e`), `cargo fuzz run dsl_validator -- -runs=10000` with 30s budget on PRs. Paired with the release workflow from 0A.
+
+### Performance
+
+- **4.1.** Validator **rejects** full-display `template` predicates unless the program opts in with `slow_budget: true`. Scheduler tracks per-tick cost histogram (`capture_ms`, `tier1_ms`, `tier2_ms`, `total_ms`), surfaced in `vcli health`. `daemon.pressure { tick_budget }` emits on 10 consecutive ticks over 90ms.
+- **4.2.** Pyramid template matching lands in v0. At asset ingestion, precompute 2-level pyramid (full + ½ resolution). Matching runs ½-res first; if best match > (confidence − 0.05), refine at full-res around candidate.
+- **4.3.** Capture runs at physical resolution; frames are immediately downsampled to logical (1x) resolution before perception. Templates are authored and stored at logical resolution. One resolution to reason about.
+- **4.4.** SQLite PRAGMA on open: `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000`, `cache_size = -32000` (32MB), `foreign_keys = ON`, `temp_store = MEMORY`.
+
+### From the codex outside voice (cross-model consensus)
+
+- **A.** `PerceptionCache` changes to `DashMap<PredicateHash, CacheEntry>`. `PredicateEvaluator::evaluate` takes `&self` (not `&mut cache`). Lock-free reads, sharded writes, safe under `rayon::par_iter`.
+- **B.** Daemon architecture retained (not single-process v0). Decisions 1.1–4.4 + A–G de-risk the surface.
+- **C.** `not_resumable` extended: any `sleep_ms` step, any throttled watch that has fired, any `elapsed_ms_since_true` with a recorded true transition → rejected at resume. Resume is narrow and safe.
+- **D.** `on_schedule` trigger removed from v0 entirely. v0 triggers: `on_submit`, `on_predicate`, `manual`. Added in v0.6 alongside `WallClock` trait (see TODOS.md).
+- **E.** Tick loop skips `capture.grab()` when no `running` program AND no `waiting on_predicate` program with active predicates. Idle daemon = near-zero CPU + no wasted permission prompts.
+- **F1.** Explicit coordinate model: capture produces physical pixels → normalize to logical (1x) → AX returns logical points → input dispatch at logical → OS driver translates to physical. One conversion at the capture boundary, nowhere else.
+- **F2.** Window disambiguation on 2+ matches: `window { app, title_contains }` resolves to the **oldest** window (lowest AX window ID). Optional `window_index: N` (0-based) selects the Nth match.
+- **F3.** Postcondition-wait exclusivity: during the `within_ms` window after dispatching an input with a postcondition, the arbiter continues to allow OTHER programs' actions but blocks the same program's next action until the postcondition resolves (truthy or timeout).
+- **F4.** `vcli-dsl` stays pure JSON → validated AST. Asset path resolution + hashing move out of DSL into a new thin `vcli-daemon::submit` module that orchestrates `dsl::validate` → `store::ingest_assets` → `store::rewrite_program`. DSL crate has no filesystem or hash dependencies.
+- **G.** Demo strategy: YT ad skipper stays as the headline, recognizable 60-second demo. Add a second E2E against a stable local desktop app (Calculator, Preview, or a small in-repo test harness) as the regression target that isn't subject to YouTube's UI drift.
+
+## Diagrams
+
+### Tick loop dataflow
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        TICK BOUNDARY (100ms)                      │
+└──────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+ ┌───────────────────┐    empty?      ┌──────────────────────┐
+ │ Any program need  │───── YES ─────▶│ SKIP capture + eval  │──▶ sleep
+ │ perception now?   │                │ (Decision E)          │
+ └────────┬──────────┘                └──────────────────────┘
+          │ NO
+          ▼
+ ┌───────────────────────┐   >90ms 10x    ┌─────────────────────┐
+ │ capture.grab()        │ ─────────────▶ │ daemon.pressure     │
+ │ (ScreenCaptureKit)    │                │ { tick_budget } (4.1)│
+ │ physical → logical    │                └─────────────────────┘
+ │ (Decision 4.3, F1)    │
+ └────────┬──────────────┘
+          │  Arc<Frame>
+          ▼
+ ┌──────────────────────────────────────────────┐
+ │ PredicateGraph (unified DAG, Decision 1.3)    │
+ │  ┌──────────────┐  ┌──────────────┐           │
+ │  │  Tier-1 eval │  │ Tier-2 eval  │           │
+ │  │ (inline)     │  │ rayon∥,      │           │
+ │  │ color_at,    │  │ respects     │           │
+ │  │ pixel_diff,  │  │ throttle_ms, │           │
+ │  │ logical,     │  │ template     │           │
+ │  │ elapsed      │  │ (pyramid 4.2)│           │
+ │  └──────┬───────┘  └──────┬───────┘           │
+ │         │                 │                    │
+ │         └────────┬────────┘                    │
+ │                  ▼                             │
+ │      DashMap<PredicateHash, CacheEntry>        │
+ │      (Decision A — interior mutability,        │
+ │       safe under par_iter)                     │
+ └──────────┬──────────────────────────────────────┘
+            │ PredicateResult per predicate
+            ▼
+ ┌────────────────────────────────────────────────┐
+ │ For each waiting program:                       │
+ │   trigger.maybe_fire(results, clock)            │
+ │                                                  │
+ │ For each running program:                       │
+ │   program.advance(results, clock)                │
+ │   → pending actions (body + fired watches)      │
+ └────────┬────────────────────────────────────────┘
+          │ Vec<PendingAction>
+          ▼
+ ┌────────────────────────────────────────────────┐
+ │ ActionArbiter (Decision 1.5, F3)               │
+ │   sort by priority desc → submit_time → pid    │
+ │   pick at most: 1 mouse, 1 keyboard            │
+ │   losers: emit action.deferred, no re-queue    │
+ │   blocked-on-own-postcondition: skipped        │
+ └────────┬────────────────────────────────────────┘
+          │ chosen actions (≤2)
+          ▼
+ ┌────────────────────────────────────────────────┐
+ │ input.dispatch(action) — sync confirm            │
+ │   postcondition? mark program waiting for it.   │
+ │   no postcondition? step complete.              │
+ └────────┬────────────────────────────────────────┘
+          │
+          ▼
+ ┌────────────────────────────────────────────────┐
+ │ event_bus.drain_and_publish()                   │
+ │   → broadcast(1024) per client (Decision 1.7)   │
+ │   → overflow: drop oldest + stream.dropped      │
+ │   → terminal events → SQLite events table      │
+ │                                                  │
+ │ trace.append(tick_record) — bounded ring (1.9)  │
+ │                                                  │
+ │ SQLite writes (WAL + NORMAL, Decision 4.4):    │
+ │   → state transitions                           │
+ │   → body_cursor bumps                           │
+ └────────┬────────────────────────────────────────┘
+          │
+          ▼
+      sleep_until(next tick boundary)
+```
+
+### Merged predicate DAG (Decision 1.3)
+
+```
+    Sources of dependency edges:
+      (R) region relative_to → predicate
+      (L) logical of → predicate
+      (E) elapsed_ms_since_true → child predicate
+
+                  ┌──────────────────┐
+                  │   skip_visible   │──(L)──┐
+                  │   (template)     │       │
+                  └────────┬─────────┘       │
+                           │(R region anchor)│
+                           ▼                  ▼
+                  ┌──────────────────┐   ┌──────────┐
+                  │ item_row_visible │   │ skip_gone│
+                  │ (template,       │   │ (not)     │
+                  │  relative_to)    │   └──────────┘
+                  └──────────────────┘
+                           │(L)
+                           ▼
+                  ┌──────────────────┐
+                  │   ready_to_buy   │
+                  │    (all_of)      │
+                  └────────┬─────────┘
+                           │(E)
+                           ▼
+                  ┌──────────────────┐
+                  │ stable_for_500ms │
+                  │ (elapsed_ms...)  │
+                  └──────────────────┘
+
+    At submit:
+      1. Build DAG from all edge sources.
+      2. Topological sort. Reject cycles with invalid_program.
+      3. Store alongside source_json.
+
+    At tick:
+      Evaluate in topological order (leaves first).
+      Tier-1 inline, Tier-2 on rayon pool.
+      DashMap cache dedups across programs by PredicateHash
+      (canonical JSON, Decision 1.1).
+      Tier-3 (v0.2+): last-cached result only; no inline eval.
+```
+
+### Program lifecycle (complete)
+
+```
+            vcli submit program.json
+                     │
+                     ▼
+              ┌───────────┐
+              │  pending  │
+              └─────┬─────┘
+                    │ daemon ready (Decision 1.2)
+                    ▼
+              ┌───────────┐ ◀──────────────────────────┐
+              │  waiting  │                             │
+              └─────┬─────┘                             │
+                    │ trigger fires (on_submit / on_predicate / manual)
+                    ▼                                   │
+              ┌───────────┐                             │
+        ┌────▶│  running  │────────────┐                │
+        │     └─────┬─────┘            │                │
+        │           │                  │                │
+        │    body   │ complete         │ step error     │
+        │    OR     │ (non-empty body) │ / assert fail  │
+        │    last   ▼                  │ / wait_for     │
+        │   watch ┌───────────┐        │   on_timeout=fail
+        │   removed│ completed │        │ / postcondition
+        │           └───────────┘        │   on_timeout=novelty
+        │                                │   (→ program.novelty
+        │                                │      then failed(novelty_timeout))
+        │    unblock                     │ / program-level timeout_ms
+        │  (future)                      │ / daemon_restart
+        │    ┌────────┐                  ▼
+        └────│ blocked│           ┌───────────┐
+             └────────┘           │  failed   │
+             (reserved, no        └───────────┘
+              v0 transitions)           ▲
+                                        │
+              cancel request            │
+                 │                       │
+                 ▼                       │
+              ┌───────────┐              │
+              │ cancelled │              │
+              └───────────┘              │
+                                         │
+      vcli resume <id>                   │
+      (only if resumable &                │
+       failed(daemon_restart))            │
+                │                         │
+                ▼                         │
+          re-eval step N-1                │
+          postcondition (Decision 2.4)    │
+                │                         │
+       ┌────────┴─────────┐               │
+       │                  │               │
+       ▼ truthy           ▼ not truthy    │
+    running           failed(resume_      │
+                      precondition_failed)┘
+```
+
+### IPC request/event flow
+
+```
+┌───────────┐    ┌───────────────────────────────────────────────┐
+│  vcli CLI │    │                  vcli daemon                   │
+└─────┬─────┘    └────────────────────────────────────────────────┘
+      │
+      │  1. connect  $TMPDIR/vcli-$UID.sock (Decision 2.5)
+      │                                          (fails if not ready — 1.2)
+      ├─────────────────────────────────────────▶│
+      │                                          │
+      │  2. send framed { id, op, params }       │
+      │     u32 BE length + UTF-8 JSON           │
+      ├─────────────────────────────────────────▶│
+      │                                          │
+      │                              ┌───────────┤
+      │                              │ op dispatcher
+      │                              │   submit / list / status /
+      │                              │   cancel / start / resume /
+      │                              │   logs / events / trace /
+      │                              │   health / gc / shutdown
+      │                              └───────────┤
+      │                                          │
+      │                                          │ for submit:
+      │                                          │   dsl::validate (pure)
+      │                                          │ → store::ingest_assets
+      │                                          │ → store::rewrite_program
+      │                                          │ → runtime::enqueue
+      │                                          │   (Decision F4)
+      │                                          │
+      │  3a. response { id, ok, result | error } │
+      │◀─────────────────────────────────────────┤
+      │                                          │
+      │  3b. (streaming ops: logs, events)       │
+      │     per-client broadcast(1024)           │
+      │      { stream, type, program_id?, data } │
+      │◀─ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ┤
+      │                                          │
+      │  3c. overflow: stream.dropped            │
+      │     { count, since } (Decision 1.7)      │
+      │◀─ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ┤
+      │                                          │
+```
+
+### Restart + resume sequence
+
+```
+Phase A — daemon startup
+─────────────────────────────────────────────────
+  1. Read config (config.toml if present)
+  2. Open SQLite, run migrations (vcli-store)
+  3. Scan assets/ vs program_assets refs → log orphan count
+  4. Transition state:
+       running  → failed(daemon_restart)
+       waiting  → reload into scheduler with trigger
+  5. Start tick loop
+  6. Start event bus
+  7. Open IPC socket ◀── first observable "ready" (Decision 1.2)
+  8. Emit daemon.started
+  9. (optional) GC if last run >7 days ago
+
+Phase B — optional user-initiated resume
+─────────────────────────────────────────────────
+
+  vcli resume <program_id> [--from-start]
+        │
+        ▼
+  Is program in failed(daemon_restart)?
+        │
+     YES│    NO
+        │    └──▶ error: bad_state_transition
+        ▼
+  Check resumability (Decision 2.4 + C):
+    - no watches
+    - no elapsed_ms_since_true WITH recorded transition
+    - no sleep_ms step
+    - no throttled watch that has fired
+    - no postcondition unresolved at crash time
+        │
+     YES│    NO
+        │    └──▶ error: not_resumable
+        ▼
+  --from-start?
+        │
+      NO│    YES
+        │    └──▶ body_cursor := 0, transition → running
+        ▼
+  Re-evaluate step (body_cursor - 1)'s postcondition/assert/wait_for
+        │
+   truthy│   not truthy
+        │    └──▶ error: resume_precondition_failed
+        ▼
+  Transition → running
+  Emit program.resumed { from_step }
+```
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | issues_found | 10 findings, all integrated |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 27 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | not_applicable | no UI scope |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CODEX:** 10 findings raised, 7 new vs the review, 3 overlap. All resolved by Decisions A–G in the "Review decisions — 2026-04-16" appendix.
+- **CROSS-MODEL:** Eng review and codex converged on 3 issues (DPI, resume safety, window geometry). Codex caught 7 additional issues the review missed (most critical: `&mut PerceptionCache` + rayon conflict, `on_schedule` clock mismatch, DSL crate IO layering). All folded into the decision ledger.
+- **UNRESOLVED:** 0
+- **VERDICT:** ENG CLEARED — ready to implement.

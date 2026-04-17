@@ -163,7 +163,14 @@ mod tests {
     #[test]
     fn pixel_diff_roundtrip() {
         let p = PredicateKind::PixelDiff {
-            region: Region::Absolute { rect: Rect { x: 0, y: 0, w: 50, h: 50 } },
+            region: Region::Absolute {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 50,
+                    h: 50,
+                },
+            },
             baseline: "sha256:abcd".into(),
             threshold: 0.05,
         };
@@ -175,8 +182,12 @@ mod tests {
     #[test]
     fn all_of_and_any_of_and_not_roundtrips() {
         for p in [
-            PredicateKind::AllOf { of: vec!["a".into(), "b".into()] },
-            PredicateKind::AnyOf { of: vec!["a".into()] },
+            PredicateKind::AllOf {
+                of: vec!["a".into(), "b".into()],
+            },
+            PredicateKind::AnyOf {
+                of: vec!["a".into()],
+            },
             PredicateKind::Not { of: "a".into() },
         ] {
             let j = serde_json::to_string(&p).unwrap();
@@ -199,7 +210,12 @@ mod tests {
     #[test]
     fn match_data_center_and_top_left() {
         let m = MatchData {
-            bbox: Rect { x: 10, y: 10, w: 40, h: 20 },
+            bbox: Rect {
+                x: 10,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
             confidence: Confidence(0.95),
         };
         assert_eq!(m.center(), Point { x: 30, y: 20 });
@@ -208,7 +224,11 @@ mod tests {
 
     #[test]
     fn predicate_result_no_match_serializes_without_match_field() {
-        let r = PredicateResult { truthy: false, match_data: None, at: 1 };
+        let r = PredicateResult {
+            truthy: false,
+            match_data: None,
+            at: 1,
+        };
         let j = serde_json::to_string(&r).unwrap();
         assert!(!j.contains("match"), "got {j}");
     }

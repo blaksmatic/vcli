@@ -110,7 +110,10 @@ mod tests {
             (ErrorCode::CaptureFailed, "capture_failed"),
             (ErrorCode::DaemonBusy, "daemon_busy"),
             (ErrorCode::NotResumable, "not_resumable"),
-            (ErrorCode::ResumePreconditionFailed, "resume_precondition_failed"),
+            (
+                ErrorCode::ResumePreconditionFailed,
+                "resume_precondition_failed",
+            ),
             (ErrorCode::Internal, "internal"),
         ] {
             assert_eq!(c.as_str(), s);

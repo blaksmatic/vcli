@@ -141,7 +141,10 @@ mod tests {
             priority: Priority::default(),
         };
         let j = serde_json::to_string(&p).unwrap();
-        assert!(!j.contains("priority"), "default priority must not serialize: {j}");
+        assert!(
+            !j.contains("priority"),
+            "default priority must not serialize: {j}"
+        );
     }
 
     #[test]

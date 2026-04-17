@@ -36,7 +36,9 @@ impl SystemClock {
     /// Create a new clock whose `now()` reads relative to process start.
     #[must_use]
     pub fn new() -> Self {
-        Self { epoch: Instant::now() }
+        Self {
+            epoch: Instant::now(),
+        }
     }
 }
 
@@ -52,7 +54,9 @@ impl Clock for SystemClock {
     }
 
     fn unix_ms(&self) -> UnixMs {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
         i64::try_from(now.as_millis()).unwrap_or(i64::MAX)
     }
 }
@@ -75,7 +79,10 @@ impl TestClock {
     #[must_use]
     pub fn at_unix_ms(baseline: UnixMs) -> Self {
         Self {
-            inner: Mutex::new(TestClockInner { now: Duration::ZERO, unix_ms: baseline }),
+            inner: Mutex::new(TestClockInner {
+                now: Duration::ZERO,
+                unix_ms: baseline,
+            }),
         }
     }
 

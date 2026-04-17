@@ -83,10 +83,18 @@ mod tests {
     #[test]
     fn absolute_roundtrip() {
         let r = Region::Absolute {
-            rect: Rect { x: 0, y: 0, w: 100, h: 50 },
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 50,
+            },
         };
         let j = serde_json::to_string(&r).unwrap();
-        assert_eq!(j, r#"{"kind":"absolute","box":{"x":0,"y":0,"w":100,"h":50}}"#);
+        assert_eq!(
+            j,
+            r#"{"kind":"absolute","box":{"x":0,"y":0,"w":100,"h":50}}"#
+        );
         let back: Region = serde_json::from_str(&j).unwrap();
         assert_eq!(back, r);
     }
@@ -132,7 +140,12 @@ mod tests {
         let j = r#"{"kind":"relative_to","predicate":"x"}"#;
         let r: Region = serde_json::from_str(j).unwrap();
         match r {
-            Region::RelativeTo { predicate, anchor, offset, size } => {
+            Region::RelativeTo {
+                predicate,
+                anchor,
+                offset,
+                size,
+            } => {
                 assert_eq!(predicate, "x");
                 assert_eq!(anchor, Anchor::Match);
                 assert_eq!(offset, Point { x: 0, y: 0 });

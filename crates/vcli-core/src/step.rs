@@ -195,8 +195,15 @@ mod tests {
     fn type_and_key_and_scroll_roundtrips() {
         for s in [
             Step::Type { text: "hi".into() },
-            Step::Key { key: "s".into(), modifiers: vec![Modifier::Cmd] },
-            Step::Scroll { at: Target::Expression("$p.match.center".into()), dx: 0, dy: -40 },
+            Step::Key {
+                key: "s".into(),
+                modifiers: vec![Modifier::Cmd],
+            },
+            Step::Scroll {
+                at: Target::Expression("$p.match.center".into()),
+                dx: 0,
+                dy: -40,
+            },
         ] {
             let back: Step = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
             assert_eq!(back, s);

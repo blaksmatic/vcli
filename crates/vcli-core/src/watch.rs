@@ -101,7 +101,9 @@ mod tests {
         for l in [
             Lifetime::OneShot,
             Lifetime::Persistent,
-            Lifetime::UntilPredicate { name: "done".into() },
+            Lifetime::UntilPredicate {
+                name: "done".into(),
+            },
             Lifetime::TimeoutMs { ms: 30_000 },
         ] {
             let j = serde_json::to_string(&l).unwrap();

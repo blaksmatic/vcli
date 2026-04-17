@@ -171,7 +171,10 @@ mod tests {
     fn program_completed_omits_emit_when_none() {
         let e = Event {
             at: 0,
-            data: EventData::ProgramCompleted { program_id: sample_program_id(), emit: None },
+            data: EventData::ProgramCompleted {
+                program_id: sample_program_id(),
+                emit: None,
+            },
         };
         let j = serde_json::to_string(&e).unwrap();
         assert!(!j.contains("\"emit\""), "got {j}");
@@ -210,7 +213,10 @@ mod tests {
     fn stream_dropped_roundtrip() {
         let e = Event {
             at: 2,
-            data: EventData::StreamDropped { count: 5, since: 100 },
+            data: EventData::StreamDropped {
+                count: 5,
+                since: 100,
+            },
         };
         let j = serde_json::to_string(&e).unwrap();
         assert!(j.contains(r#""type":"stream.dropped""#));
@@ -221,8 +227,16 @@ mod tests {
     #[test]
     fn daemon_pressure_and_frame_skipped_roundtrip() {
         for e in [
-            Event { at: 0, data: EventData::DaemonPressure { tick_budget_ms: 90 } },
-            Event { at: 0, data: EventData::TickFrameSkipped { reason: "capture_overrun".into() } },
+            Event {
+                at: 0,
+                data: EventData::DaemonPressure { tick_budget_ms: 90 },
+            },
+            Event {
+                at: 0,
+                data: EventData::TickFrameSkipped {
+                    reason: "capture_overrun".into(),
+                },
+            },
         ] {
             let back: Event = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
             assert_eq!(back, e);
@@ -232,8 +246,16 @@ mod tests {
     #[test]
     fn daemon_started_stopped_roundtrip() {
         for e in [
-            Event { at: 1, data: EventData::DaemonStarted { version: "0.0.1".into() } },
-            Event { at: 2, data: EventData::DaemonStopped },
+            Event {
+                at: 1,
+                data: EventData::DaemonStarted {
+                    version: "0.0.1".into(),
+                },
+            },
+            Event {
+                at: 2,
+                data: EventData::DaemonStopped,
+            },
         ] {
             let back: Event = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
             assert_eq!(back, e);

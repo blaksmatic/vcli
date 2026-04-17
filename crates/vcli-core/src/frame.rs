@@ -62,7 +62,13 @@ impl Frame {
             "frame buffer too small: have {}, need {needed}",
             pixels.len()
         );
-        Self { format, bounds, stride, pixels, captured_at_ns }
+        Self {
+            format,
+            bounds,
+            stride,
+            pixels,
+            captured_at_ns,
+        }
     }
 
     /// Width in pixels.
@@ -85,7 +91,12 @@ mod tests {
     fn sample() -> Frame {
         Frame::new(
             FrameFormat::Bgra8,
-            Rect { x: 0, y: 0, w: 4, h: 2 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
             4 * 4,
             vec![0u8; 4 * 4 * 2].into(),
             123,
@@ -113,7 +124,12 @@ mod tests {
     fn new_panics_on_too_small_buffer() {
         let _ = Frame::new(
             FrameFormat::Bgra8,
-            Rect { x: 0, y: 0, w: 100, h: 100 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
             400,
             vec![0u8; 10].into(),
             0,

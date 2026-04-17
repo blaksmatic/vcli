@@ -82,7 +82,10 @@ mod tests {
 
     #[test]
     fn click_roundtrip() {
-        let a = InputAction::Click { at: Point { x: 10, y: 20 }, button: Button::Left };
+        let a = InputAction::Click {
+            at: Point { x: 10, y: 20 },
+            button: Button::Left,
+        };
         let j = serde_json::to_string(&a).unwrap();
         assert!(j.contains(r#""kind":"click""#));
         assert!(j.contains(r#""button":"left""#));
@@ -92,7 +95,9 @@ mod tests {
 
     #[test]
     fn type_roundtrip() {
-        let a = InputAction::Type { text: "hello".into() };
+        let a = InputAction::Type {
+            text: "hello".into(),
+        };
         let back: InputAction = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(back, a);
     }
@@ -110,7 +115,10 @@ mod tests {
 
     #[test]
     fn key_without_modifiers_omits_field() {
-        let a = InputAction::Key { key: "return".into(), modifiers: vec![] };
+        let a = InputAction::Key {
+            key: "return".into(),
+            modifiers: vec![],
+        };
         let j = serde_json::to_string(&a).unwrap();
         assert!(!j.contains("modifiers"));
     }
@@ -130,7 +138,9 @@ mod tests {
 
     #[test]
     fn move_roundtrip() {
-        let a = InputAction::Move { at: Point { x: 5, y: 5 } };
+        let a = InputAction::Move {
+            at: Point { x: 5, y: 5 },
+        };
         let back: InputAction = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(back, a);
     }

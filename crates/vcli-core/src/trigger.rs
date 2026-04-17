@@ -33,7 +33,9 @@ mod tests {
 
     #[test]
     fn on_predicate_roundtrip() {
-        let t = Trigger::OnPredicate { name: "ready".into() };
+        let t = Trigger::OnPredicate {
+            name: "ready".into(),
+        };
         let j = serde_json::to_string(&t).unwrap();
         let back: Trigger = serde_json::from_str(&j).unwrap();
         assert_eq!(back, t);
