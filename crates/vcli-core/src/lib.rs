@@ -58,3 +58,7 @@ pub use program::{DslVersion, OnComplete, OnFail, Priority, Program};
 pub mod canonical;
 
 pub use canonical::{canonicalize, predicate_hash, CanonicalError, PredicateHash};
+
+pub mod events;
+
+pub use events::{Event, EventData};
