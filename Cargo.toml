@@ -5,6 +5,7 @@ members = [
     "crates/vcli-capture",
     "crates/vcli-dsl",
     "crates/vcli-ipc",
+    "crates/vcli-perception",
     "crates/vcli-store",
 ]
 
@@ -39,9 +40,14 @@ tracing = "0.1"
 # Platform-specific, referenced from vcli-capture only. Declaring here so
 # downstream crates that later depend on vcli-capture don't re-select versions.
 screencapturekit = "1"
-image = "0.25"
+
+# Added by vcli-perception lane
+dashmap = "6"
+imageproc = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Dev-only
 proptest = "1"
 tempfile = "3"
 tokio-test = "0.4"
+approx = "0.5"
