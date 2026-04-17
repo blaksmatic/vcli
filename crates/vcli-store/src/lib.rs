@@ -10,6 +10,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod error;
+pub mod events;
 pub mod migrations;
 pub mod paths;
 pub mod pragmas;
@@ -17,6 +18,7 @@ pub mod resume;
 pub mod store;
 
 pub use migrations::LATEST_SCHEMA_VERSION;
+pub use events::StoredEvent;
 pub use resume::ResumeOutcome;
 pub use store::{NewProgram, ProgramRow, RecoveredProgram, Store};
 
