@@ -31,3 +31,7 @@ pub use wire::{
 pub mod handler;
 
 pub use handler::{Handler, StreamSender};
+
+pub mod server;
+
+pub use server::IpcServer;
