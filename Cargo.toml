@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vcli-core",
+    "crates/vcli-capture",
 ]
 
 [workspace.package]
@@ -23,3 +24,10 @@ unicode-normalization = "0.1"
 
 # Dev-only
 proptest = "1"
+
+tracing = "0.1"
+# Platform-specific, referenced from vcli-capture only. Declaring here so
+# downstream crates that later depend on vcli-capture don't re-select versions.
+screencapturekit = "1"
+image = "0.25"
+tempfile = "3"
