@@ -6,10 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use vcli_core::frame::{Frame, FrameFormat};
-use vcli_core::geom::Rect;
-use vcli_core::region::WindowIndex;
 
-use crate::capture::{Capture, DisplayId, WindowDescriptor};
+use crate::capture::{Capture, WindowDescriptor};
 use crate::error::CaptureError;
 
 /// Canned-data capture backend. Cycles through `screen_frames` on each
@@ -146,6 +144,11 @@ impl Capture for MockCapture {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use vcli_core::geom::Rect;
+    use vcli_core::region::WindowIndex;
+
+    use crate::capture::DisplayId;
 
     use super::*;
 

@@ -14,7 +14,7 @@
 //! | `SCScreenshotManager::capture_image_with_filter` | `SCScreenshotManager::capture_image(&filter, &config)` |
 //! | `image.bgra_bytes()` | `image.rgba_data()` → RGBA Vec<u8> (we store as Rgba8 frame) |
 //! | `image.bytes_per_row()` | Not available; computed as `width * 4` |
-//! | `display.scale_factor()` | Not available; use `CGDisplayScaleFactor` via extern "C" |
+//! | `display.scale_factor()` | Not available; scale is always 1.0 (SCK gives logical px) |
 //! | `CGRect.origin.x`, `.size.width` | `CGRect.x`, `.width` (flat struct) |
 //! | `window.owning_application()?.application_name().ok()` | `.application_name()` returns `String` directly |
 //!
@@ -23,7 +23,6 @@
 //!   pixels for v0 (macOS). Physical pixel downsample happens in `convert.rs`
 //!   using the display's scale factor.
 
-#![allow(unsafe_code)] // Required for CGDisplayScaleFactor extern "C".
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -151,22 +150,6 @@ fn build_descriptors(windows: Vec<SCWindow>) -> Vec<WindowDescriptor> {
     assign_window_indices(raw)
 }
 
-/// Get the scale factor for the primary display.
-/// Falls back to 1.0 if unavailable.
-fn primary_scale_factor(display: &SCDisplay) -> f32 {
-    extern "C" {
-        fn CGDisplayScaleFactor(display_id: u32) -> f64;
-    }
-    // SAFETY: CGDisplayScaleFactor is a stable CoreGraphics symbol. The
-    // display_id is obtained from SCDisplay::display_id() which is valid.
-    let factor = unsafe { CGDisplayScaleFactor(display.display_id()) };
-    if factor > 0.0 {
-        factor as f32
-    } else {
-        1.0
-    }
-}
-
 /// Return current monotonic-ish timestamp in nanoseconds.
 fn monotonic_ns() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -227,18 +210,15 @@ impl Capture for MacCapture {
         })?;
         let stride = (width_px as usize) * 4;
 
-        let scale = primary_scale_factor(&display);
-
-        // rgba_data returns RGBA; we treat it as Bgra8-shaped but mark correctly.
-        // convert.rs accepts a RawBgra struct for stride/downsample math —
-        // the bytes are RGBA but the layout logic (stride, scale) is identical.
+        // SCDisplay.width()/height() report logical pixels; scale = 1.0.
+        // CGDisplayScaleFactor was removed from macOS 26 SDK.
         let raw = RawBgra {
             width_px,
             height_px,
             stride,
             pixels,
             captured_at_ns: monotonic_ns(),
-            scale,
+            scale: 1.0,
             logical_origin_x: 0,
             logical_origin_y: 0,
         };
@@ -283,17 +263,14 @@ impl Capture for MacCapture {
         })?;
         let stride = (img_w as usize) * 4;
 
-        let content = self.refresh_content()?;
-        let display = Self::primary_display(&content)?;
-        let scale = primary_scale_factor(&display);
-
+        // display_scale is always 1.0 for SCK (logical px). No content refresh needed.
         let raw = RawBgra {
             width_px: img_w,
             height_px: img_h,
             stride,
             pixels,
             captured_at_ns: monotonic_ns(),
-            scale,
+            scale: 1.0,
             logical_origin_x: frame_rect.x as i32,
             logical_origin_y: frame_rect.y as i32,
         };
