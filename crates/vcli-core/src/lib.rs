@@ -22,3 +22,7 @@ pub use frame::{Frame, FrameFormat};
 pub mod clock;
 
 pub use clock::{Clock, SystemClock, TestClock, UnixMs};
+
+pub mod region;
+
+pub use region::{Anchor, Region, WindowIndex};
