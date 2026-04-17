@@ -29,3 +29,6 @@ pub mod predicates;
 
 pub mod expression;
 pub use expression::{Accessor, Expression};
+
+pub mod steps;
+pub use steps::{validate_body_steps, validate_watch_steps};
