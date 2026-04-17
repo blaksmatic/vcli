@@ -1,4 +1,5 @@
-//! Streaming frames placeholder — implemented in Task 8.
+//! Streaming frames pushed by the server on `logs` / `events` / `trace` ops.
+//! Matches spec §IPC → Messages (Event form) and Decision 1.7 (`stream.dropped`).
 
 use serde::{Deserialize, Serialize};
 
@@ -56,5 +57,52 @@ impl StreamFrame {
     #[must_use]
     pub fn end_of_stream(id: RequestId, kind: StreamKind) -> Self {
         Self { id, stream: kind, end: true, event: None, trace: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcli_core::EventData;
+
+    fn rid() -> RequestId {
+        "12345678-1234-4567-8910-111213141516".parse().unwrap()
+    }
+
+    #[test]
+    fn event_frame_serializes_with_kind_events() {
+        let f = StreamFrame::event(
+            rid(),
+            Event {
+                at: 1,
+                data: EventData::DaemonStarted { version: "0.0.1".into() },
+            },
+        );
+        let j = serde_json::to_string(&f).unwrap();
+        assert!(j.contains(r#""stream":"events""#), "{j}");
+        assert!(j.contains(r#""type":"daemon.started""#), "{j}");
+        assert!(!j.contains(r#""end":"#), "{j}");
+        let back: StreamFrame = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, f);
+    }
+
+    #[test]
+    fn trace_frame_carries_opaque_json() {
+        let f = StreamFrame::trace(rid(), serde_json::json!({ "tick": 12 }));
+        let j = serde_json::to_string(&f).unwrap();
+        assert!(j.contains(r#""stream":"trace""#), "{j}");
+        let back: StreamFrame = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, f);
+    }
+
+    #[test]
+    fn end_of_stream_flag_is_emitted_and_parsed() {
+        let f = StreamFrame::end_of_stream(rid(), StreamKind::Events);
+        let j = serde_json::to_string(&f).unwrap();
+        assert!(j.contains(r#""end":true"#), "{j}");
+        let back: StreamFrame = serde_json::from_str(&j).unwrap();
+        assert!(back.end);
+        assert!(back.event.is_none());
+        assert!(back.trace.is_none());
     }
 }
