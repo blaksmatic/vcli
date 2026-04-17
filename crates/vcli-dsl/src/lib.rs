@@ -24,3 +24,5 @@ pub use error::{DslError, DslErrorKind};
 pub mod parse;
 
 pub(crate) mod hint;
+
+pub mod predicates;
