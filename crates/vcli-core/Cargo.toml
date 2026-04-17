@@ -1,0 +1,20 @@
+[package]
+name = "vcli-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared types, canonical JSON, clock, and event/error taxonomy for vcli."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+ryu = { workspace = true }
+unicode-normalization = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
