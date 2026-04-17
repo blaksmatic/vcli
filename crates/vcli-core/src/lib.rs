@@ -38,3 +38,7 @@ pub use action::{Button, InputAction, Modifier};
 pub mod step;
 
 pub use step::{OnFail, OnTimeout, Step, Target};
+
+pub mod watch;
+
+pub use watch::{Lifetime, Watch, WatchWhen};
