@@ -21,3 +21,7 @@ pub use error::InputError;
 pub mod kill_switch;
 
 pub use kill_switch::{KillSwitch, KillSwitchObserver};
+
+pub mod sink;
+
+pub use sink::{DragSegment, InputSink};
