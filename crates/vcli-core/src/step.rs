@@ -58,7 +58,7 @@ pub enum Step {
         /// Click target.
         at: Target,
         /// Which button to click with.
-        #[serde(default = "default_button")]
+        #[serde(default = "default_button", skip_serializing_if = "is_default_button")]
         button: Button,
     },
     /// Type literal text.
@@ -113,6 +113,10 @@ pub enum Step {
 
 fn default_button() -> Button {
     Button::Left
+}
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_button(b: &Button) -> bool {
+    *b == Button::Left
 }
 fn default_on_timeout() -> OnTimeout {
     OnTimeout::Fail

@@ -176,6 +176,7 @@ pub fn predicate_hash(value: &Value) -> Result<PredicateHash, CanonicalError> {
 
 // ---- minimal SHA-256 (FIPS-180-4) ----------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn sha256_hex(data: &[u8]) -> String {
     let mut state: [u32; 8] = [
         0x6a09_e667,

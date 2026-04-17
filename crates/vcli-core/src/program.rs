@@ -66,8 +66,9 @@ pub struct Program {
     /// Reactive rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watches: Vec<Watch>,
-    /// Sequential body.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Sequential body. Always serialized (even when empty) so that
+    /// canonical JSON is stable across parse → re-serialize round-trips.
+    #[serde(default)]
     pub body: Vec<Step>,
     /// Optional completion emitter.
     #[serde(default, skip_serializing_if = "Option::is_none")]

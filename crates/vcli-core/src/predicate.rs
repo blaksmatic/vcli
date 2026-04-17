@@ -10,11 +10,12 @@ use crate::clock::UnixMs;
 use crate::geom::Rect;
 use crate::region::Region;
 
-/// Confidence as a `f32` in [0, 1]. Newtyped to avoid silent mismatches with
-/// arbitrary f32s and to prevent accidental equality checks that surprise.
+/// Confidence as a `f64` in [0, 1]. Newtyped to avoid silent mismatches with
+/// arbitrary floats and to prevent accidental equality checks that surprise.
+/// Uses `f64` (not `f32`) to preserve the full JSON precision on round-trip.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Confidence(pub f32);
+pub struct Confidence(pub f64);
 
 /// RGB triple for color matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,7 +60,7 @@ pub enum PredicateKind {
         /// hash at eval time and compares).
         baseline: String,
         /// Fractional Hamming-distance threshold (0.0..=1.0).
-        threshold: f32,
+        threshold: f64,
     },
     /// Logical AND across named predicates.
     AllOf {
