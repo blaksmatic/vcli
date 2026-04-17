@@ -17,3 +17,7 @@
 pub mod error;
 
 pub use error::InputError;
+
+pub mod kill_switch;
+
+pub use kill_switch::{KillSwitch, KillSwitchObserver};
