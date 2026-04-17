@@ -27,3 +27,7 @@ pub mod wire;
 pub use wire::{
     Request, RequestId, RequestOp, Response, ResponseBody, StreamFrame, StreamKind,
 };
+
+pub mod handler;
+
+pub use handler::{Handler, StreamSender};
