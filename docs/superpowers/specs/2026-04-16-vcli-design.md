@@ -343,12 +343,12 @@ struct CacheEntry {
                        ▼
                    waiting ──── trigger fires ────▶ running
                                                       │
-                                                      ├── body errors      → failed
-                                                      ├── timeout_ms       → failed
-                                                      ├── cancel request   → cancelled
-                                                      ├── body complete    → completed
-                                                      ├── on_complete      → completed
-                                                      └── blocked (future) → blocked
+                                                      ├── body step errors / assert fails → failed
+                                                      ├── wait_for timeout (on_timeout=fail) → failed
+                                                      ├── program-level timeout_ms         → failed
+                                                      ├── cancel request                   → cancelled
+                                                      ├── body complete (non-empty body)   → completed
+                                                      └── blocked (future)                 → blocked
                                                               │
                                                            unblock
                                                               ▼
@@ -356,6 +356,10 @@ struct CacheEntry {
 ```
 
 `blocked` is reserved for v0 but no feature transitions into it. Allows later features (external-event awaiting) without schema migration.
+
+**Pure-watches programs.** A program with an empty `body` has no natural completion — it stays `running` until cancelled, times out via program-level `timeout_ms`, or an `until_predicate`-lifetimed watch's guard becomes truthy and that was the only remaining watch (no remaining active watches = completed). The YT ad skipper has `timeout_ms: null` and a `persistent` watch, so it runs until cancelled — that's the intended behavior.
+
+**`on_complete` / `on_fail` are event emitters, not transition triggers.** When a program transitions to `completed` or `failed` for any reason above, the daemon fires `program.completed` / `program.failed` system events, and *additionally* emits the optional custom event name specified in `on_complete.emit` / `on_fail.emit`. Subscribers can listen to either form.
 
 Transitions are atomic within a tick and emit `program.state_changed { from, to, reason }`.
 
@@ -478,8 +482,8 @@ Length-prefixed frames: `u32` big-endian length, then UTF-8 JSON. Binary-safe, d
 
 ```jsonc
 // Request
-{ "id": "<uuid>", "op": "submit"|"list"|"status"|"cancel"|"resume"|
-                        "logs"|"events"|"trace"|"health"|"shutdown",
+{ "id": "<uuid>", "op": "submit"|"list"|"status"|"cancel"|"start"|"resume"|
+                        "logs"|"events"|"trace"|"health"|"gc"|"shutdown",
   "params": { /* op-specific */ } }
 
 // Response (non-streaming)
@@ -498,7 +502,7 @@ Length-prefixed frames: `u32` big-endian length, then UTF-8 JSON. Binary-safe, d
 program.submitted            { program_id, name }
 program.state_changed        { program_id, from, to, reason }
 program.completed            { program_id, emit? }
-program.failed               { program_id, reason, step? }
+program.failed               { program_id, reason, step?, emit? }
 program.resumed              { program_id, from_step }
 watch.fired                  { program_id, watch_index, predicate }
 action.dispatched            { program_id, step, target? }
@@ -527,6 +531,7 @@ vcli submit <program.json>              # → program_id. Resolves assets, valid
 vcli list [--state STATE]               # tabular list of programs
 vcli status <program_id>                # detailed status
 vcli cancel <program_id>                # running → cancelled; idempotent
+vcli start <program_id>                 # fires a manual trigger; waiting → running
 vcli resume <program_id> [--from-start] # continues after daemon_restart failure
 
 vcli logs <program_id> [--follow]       # streams program-scoped events
