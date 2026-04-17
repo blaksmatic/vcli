@@ -109,4 +109,59 @@ mod tests {
         let err = write_frame(&mut a, &big).await.unwrap_err();
         assert!(matches!(err, IpcError::FrameTooLarge { .. }), "{err:?}");
     }
+
+    #[tokio::test]
+    async fn read_reassembles_across_partial_writes() {
+        // Write header one byte at a time, then body, to ensure the reader
+        // correctly loops over `read()` returns < requested.
+        let (mut a, mut b) = duplex(1);
+        let sent = Msg { id: 42, text: "partial".into() };
+        let writer = tokio::spawn(async move {
+            write_frame(&mut a, &sent).await.unwrap();
+        });
+        let got: Msg = read_frame(&mut b).await.unwrap();
+        writer.await.unwrap();
+        assert_eq!(got.id, 42);
+        assert_eq!(got.text, "partial");
+    }
+
+    #[tokio::test]
+    async fn read_rejects_oversize_header() {
+        let (mut a, mut b) = duplex(64);
+        // Forge a header larger than MAX_FRAME_LEN.
+        let huge = MAX_FRAME_LEN + 1;
+        a.write_all(&huge.to_be_bytes()).await.unwrap();
+        let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
+        assert!(matches!(err, IpcError::FrameTooLarge { len, .. } if len == huge));
+    }
+
+    #[tokio::test]
+    async fn read_reports_clean_eof_between_frames() {
+        let (a, mut b) = duplex(64);
+        drop(a); // peer closes with no bytes sent
+        let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
+        assert!(matches!(err, IpcError::UnexpectedEof { got: 0, expected: 4 }));
+    }
+
+    #[tokio::test]
+    async fn read_reports_mid_frame_eof() {
+        let (mut a, mut b) = duplex(64);
+        // Announce 100 bytes but send only 10 then close.
+        a.write_all(&100u32.to_be_bytes()).await.unwrap();
+        a.write_all(&[0u8; 10]).await.unwrap();
+        drop(a);
+        let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
+        assert!(matches!(err, IpcError::UnexpectedEof { got: 10, expected: 100 }));
+    }
+
+    #[tokio::test]
+    async fn read_rejects_invalid_json_body() {
+        let (mut a, mut b) = duplex(64);
+        let bad = b"not json";
+        let len = u32::try_from(bad.len()).unwrap();
+        a.write_all(&len.to_be_bytes()).await.unwrap();
+        a.write_all(bad).await.unwrap();
+        let err: IpcError = read_frame::<_, Msg>(&mut b).await.unwrap_err();
+        assert!(matches!(err, IpcError::InvalidJson(_)));
+    }
 }
