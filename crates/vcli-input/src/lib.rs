@@ -29,3 +29,7 @@ pub use sink::{DragSegment, InputSink};
 pub mod mock;
 
 pub use mock::MockInputSink;
+
+pub mod keymap;
+
+pub use keymap::{macos_keycode, CanonicalKey};
