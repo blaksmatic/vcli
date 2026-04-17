@@ -16,7 +16,7 @@ pub mod pragmas;
 pub mod store;
 
 pub use migrations::LATEST_SCHEMA_VERSION;
-pub use store::{RecoveredProgram, Store};
+pub use store::{NewProgram, ProgramRow, RecoveredProgram, Store};
 
 pub use error::{StoreError, StoreResult};
 pub use paths::{asset_blob_path, assets_root, db_path};
