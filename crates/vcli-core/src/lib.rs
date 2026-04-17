@@ -37,7 +37,7 @@ pub use action::{Button, InputAction, Modifier};
 
 pub mod step;
 
-pub use step::{OnFail, OnTimeout, Step, Target};
+pub use step::{OnTimeout, Step, Target};
 
 pub mod watch;
 
@@ -50,3 +50,7 @@ pub use trigger::Trigger;
 pub mod state;
 
 pub use state::ProgramState;
+
+pub mod program;
+
+pub use program::{DslVersion, OnComplete, OnFail, Priority, Program};
