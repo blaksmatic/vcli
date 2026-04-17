@@ -6,7 +6,6 @@
 //! Usage:  cargo run -p vcli-capture --example capture_once
 //!         cargo run -p vcli-capture --example capture_once -- --save /tmp/out.png
 
-use std::env;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -21,6 +20,7 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "macos")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    use std::env;
     use vcli_capture::{
         capture::Capture,
         macos::MacCapture,
