@@ -20,3 +20,5 @@ pub use path::JsonPath;
 
 pub mod error;
 pub use error::{DslError, DslErrorKind};
+
+pub mod parse;
