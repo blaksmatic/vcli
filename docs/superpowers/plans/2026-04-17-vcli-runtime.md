@@ -32,12 +32,13 @@ impl Scheduler {
         capture:    Box<dyn vcli_capture::Capture>,
         input:      std::sync::Arc<dyn vcli_input::InputSink>,
         perception: vcli_perception::Perception,
-        clock:      std::sync::Arc<dyn vcli_core::Clock + Send + Sync>,
+        clock:      std::sync::Arc<dyn RuntimeClock>,
         cmd_rx:     crossbeam_channel::Receiver<SchedulerCommand>,
         event_tx:   crossbeam_channel::Sender<vcli_core::Event>,
     ) -> Self;
 
     pub fn run_until_shutdown(self);
+    pub fn tick_once_pub(&mut self);  // public for deterministic test stepping
 }
 
 pub enum SchedulerCommand {
@@ -169,7 +170,7 @@ tempfile          = { workspace = true }
 mod arbiter;
 mod body;
 mod budget;
-mod clock;
+pub mod clock;  // pub so scenarios can reference ManualClock via the full path
 mod command;
 mod confirm;
 mod error;
@@ -182,6 +183,7 @@ mod transitions;
 mod triggers;
 mod watches;
 
+pub use clock::{ManualClock, RuntimeClock, SystemRuntimeClock};
 pub use command::SchedulerCommand;
 pub use error::{ErrorCode, RuntimeError};
 pub use scheduler::{Scheduler, SchedulerConfig};
@@ -492,45 +494,58 @@ EOF
 **Files:**
 - Create: `/Users/admin/Workspace/vcli/crates/vcli-runtime/src/clock.rs`
 
-`vcli-core` already exports `Clock`, `SystemClock`, `TestClock`, and `UnixMs`. `RuntimeClock` is a thin adapter that pairs `now_ms()` with a `sleep_ms()` so the scheduler can pace ticks deterministically under `ManualClock` in tests.
+`vcli-core` already exports `Clock`, `SystemClock`, `TestClock`, and `UnixMs`. `RuntimeClock` is a **standalone** scheduler-facing trait that pairs a wall-clock reading (`unix_ms`) with a blocking sleep (`sleep_ms`). It deliberately does **not** extend `vcli_core::Clock` — Rust 1.75 (our MSRV) cannot upcast `Arc<dyn Sub>` to `Arc<dyn Super>`, and we'd have to box/forward anyway. Implementors wrap a `vcli_core::Clock` internally; scheduler callers only deal with `Arc<dyn RuntimeClock>`.
 
 - [ ] **Step 1: Write module + tests**
 
 ```rust
-//! Scheduler clock. Extends `vcli_core::Clock` with a blocking `sleep_ms`
-//! so tests can substitute a manual clock that advances time without actually
+//! Scheduler-facing clock. Combines a wall-clock read with a blocking sleep so
+//! tests can substitute a manual clock that advances time without actually
 //! sleeping.
+//!
+//! Not a supertrait of `vcli_core::Clock` — Rust 1.75 lacks trait-object
+//! upcasting. Implementors forward `unix_ms` to an inner `vcli_core::Clock` or
+//! compute it directly.
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use vcli_core::{Clock, UnixMs};
+use vcli_core::{Clock, SystemClock, UnixMs};
 
-/// Scheduler-facing clock. Implementors must be `Send + Sync` — the scheduler
-/// holds them behind an `Arc<dyn RuntimeClock>`.
-pub trait RuntimeClock: Clock + Send + Sync {
+/// Scheduler-facing clock. `Send + Sync` because the scheduler holds it behind
+/// `Arc<dyn RuntimeClock>`.
+pub trait RuntimeClock: Send + Sync {
+    /// Wall-clock reading for event timestamps.
+    fn unix_ms(&self) -> UnixMs;
     /// Block for `ms` milliseconds. `ManualClock` short-circuits under tests.
     fn sleep_ms(&self, ms: u32);
 }
 
-/// Production clock: `SystemClock` wall time + `std::thread::sleep`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SystemRuntimeClock;
+/// Production clock: wraps `vcli_core::SystemClock` + `std::thread::sleep`.
+#[derive(Debug, Default)]
+pub struct SystemRuntimeClock {
+    inner: SystemClock,
+}
 
-impl Clock for SystemRuntimeClock {
-    fn now_ms(&self) -> UnixMs {
-        vcli_core::SystemClock.now_ms()
+impl SystemRuntimeClock {
+    /// Fresh instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { inner: SystemClock::new() }
     }
 }
 
 impl RuntimeClock for SystemRuntimeClock {
+    fn unix_ms(&self) -> UnixMs {
+        self.inner.unix_ms()
+    }
     fn sleep_ms(&self, ms: u32) {
         std::thread::sleep(Duration::from_millis(u64::from(ms)));
     }
 }
 
-/// Deterministic clock for tests. `now_ms()` returns whatever the test set
-/// via `set_now_ms`; `sleep_ms` advances `now_ms` by the same amount instead
+/// Deterministic clock for tests. `unix_ms()` returns whatever the test set
+/// via `set_unix_ms`; `sleep_ms` advances the clock by the same amount instead
 /// of blocking.
 #[derive(Debug, Clone)]
 pub struct ManualClock {
@@ -545,7 +560,7 @@ impl ManualClock {
     }
 
     /// Jump the clock to `ms`.
-    pub fn set_now_ms(&self, ms: UnixMs) {
+    pub fn set_unix_ms(&self, ms: UnixMs) {
         let (lock, cv) = &*self.inner;
         *lock.lock().unwrap() = ms;
         cv.notify_all();
@@ -560,16 +575,13 @@ impl ManualClock {
     }
 }
 
-impl Clock for ManualClock {
-    fn now_ms(&self) -> UnixMs {
+impl RuntimeClock for ManualClock {
+    fn unix_ms(&self) -> UnixMs {
         *self.inner.0.lock().unwrap()
     }
-}
-
-impl RuntimeClock for ManualClock {
     fn sleep_ms(&self, ms: u32) {
         // Determinism: treat sleep as an advance, not a block. Scenario tests
-        // call `tick_once()` manually; they never need real wall-clock pacing.
+        // drive ticks manually; they never need real wall-clock pacing.
         self.advance_ms(ms);
     }
 }
@@ -582,7 +594,7 @@ mod tests {
     fn manual_clock_advance_adds_time() {
         let c = ManualClock::new(1_000);
         c.advance_ms(250);
-        assert_eq!(c.now_ms(), 1_250);
+        assert_eq!(c.unix_ms(), 1_250);
     }
 
     #[test]
@@ -591,14 +603,14 @@ mod tests {
         let t0 = std::time::Instant::now();
         c.sleep_ms(10_000);
         assert!(t0.elapsed() < Duration::from_millis(100), "sleep must not block");
-        assert_eq!(c.now_ms(), 10_000);
+        assert_eq!(c.unix_ms(), 10_000);
     }
 
     #[test]
     fn system_runtime_clock_is_monotonic_within_a_tick() {
-        let c = SystemRuntimeClock;
-        let t1 = c.now_ms();
-        let t2 = c.now_ms();
+        let c = SystemRuntimeClock::new();
+        let t1 = c.unix_ms();
+        let t2 = c.unix_ms();
         assert!(t2 >= t1);
     }
 }
@@ -632,33 +644,35 @@ EOF
 
 ```rust
 //! Event emitter: wraps a `crossbeam_channel::Sender<Event>` and stamps every
-//! emission with `clock.now_ms()`.
+//! emission with `clock.unix_ms()`.
 
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use vcli_core::{Clock, Event, EventData};
+use vcli_core::{Event, EventData};
+
+use crate::clock::RuntimeClock;
 
 /// Stamp + send. The daemon owns the receiver side.
 #[derive(Clone)]
 pub struct EventEmitter {
     tx: Sender<Event>,
-    clock: Arc<dyn Clock + Send + Sync>,
+    clock: Arc<dyn RuntimeClock>,
 }
 
 impl EventEmitter {
     /// Constructor.
     #[must_use]
-    pub fn new(tx: Sender<Event>, clock: Arc<dyn Clock + Send + Sync>) -> Self {
+    pub fn new(tx: Sender<Event>, clock: Arc<dyn RuntimeClock>) -> Self {
         Self { tx, clock }
     }
 
-    /// Emit `data` stamped with `now_ms()`. Returns `false` only if the
+    /// Emit `data` stamped with `clock.unix_ms()`. Returns `false` only if the
     /// receiver has been dropped (daemon shut down before us). The scheduler
     /// ignores the return value and keeps running; the daemon drains
     /// remaining events after joining the scheduler thread.
     pub fn emit(&self, data: EventData) -> bool {
-        let ev = Event { at: self.clock.now_ms(), data };
+        let ev = Event { at: self.clock.unix_ms(), data };
         self.tx.send(ev).is_ok()
     }
 }
@@ -677,7 +691,7 @@ mod tests {
     #[test]
     fn emit_stamps_with_clock_now() {
         let (tx, rx) = unbounded::<Event>();
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ManualClock::new(12_345));
+        let clock: Arc<dyn RuntimeClock> = Arc::new(ManualClock::new(12_345));
         let em = EventEmitter::new(tx, clock);
         assert!(em.emit(EventData::ProgramSubmitted { program_id: sample_id(), name: "x".into() }));
         let ev = rx.recv().unwrap();
@@ -687,7 +701,7 @@ mod tests {
     #[test]
     fn emit_returns_false_when_receiver_dropped() {
         let (tx, rx) = unbounded::<Event>();
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ManualClock::new(0));
+        let clock: Arc<dyn RuntimeClock> = Arc::new(ManualClock::new(0));
         let em = EventEmitter::new(tx, clock);
         drop(rx);
         assert!(!em.emit(EventData::DaemonStopped));
@@ -847,6 +861,9 @@ pub struct RunningProgram {
     pub watch_state: HashMap<u32, WatchRuntime>,
     /// If set, the next successful transition emits `program.resumed{from_step}`.
     pub resumed_from: Option<u32>,
+    /// Per-program body executor state (SleepMs / WaitFor accumulators).
+    /// Persists across ticks so in-flight waits advance between frames.
+    pub body_state: crate::body::BodyState,
 }
 
 /// Per-watch runtime state.
@@ -872,6 +889,7 @@ impl RunningProgram {
             body_cursor: None,
             watch_state: HashMap::new(),
             resumed_from: None,
+            body_state: crate::body::BodyState::default(),
         }
     }
 
@@ -2305,7 +2323,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use vcli_core::{Clock, Event, EventData, ProgramId};
+use vcli_core::{Event, EventData, ProgramId};
 use vcli_core::state::ProgramState;
 use vcli_perception::Perception;
 use vcli_capture::Capture;
@@ -2334,13 +2352,17 @@ impl Default for SchedulerConfig {
 }
 
 /// The scheduler.
+///
+/// Single clock storage: `Arc<dyn RuntimeClock>` covers both wall-clock reads
+/// (via `unix_ms`) and tick pacing (via `sleep_ms`). `RuntimeClock` does not
+/// extend `vcli_core::Clock` — that would require trait-object upcasting,
+/// which is only stable from Rust 1.86 and our MSRV is 1.75.
 pub struct Scheduler {
     config: SchedulerConfig,
     capture: Box<dyn Capture>,
     input: Arc<dyn InputSink>,
     perception: Perception,
-    clock_rt: Arc<dyn RuntimeClock>,
-    clock_core: Arc<dyn Clock + Send + Sync>,
+    clock: Arc<dyn RuntimeClock>,
     cmd_rx: Receiver<SchedulerCommand>,
     event: EventEmitter,
     programs: HashMap<ProgramId, RunningProgram>,
@@ -2359,34 +2381,38 @@ impl Scheduler {
         cmd_rx: Receiver<SchedulerCommand>,
         event_tx: Sender<Event>,
     ) -> Self {
-        // Bridge into vcli_core::Clock for EventEmitter (same wall time).
-        let core: Arc<dyn Clock + Send + Sync> = Arc::clone(&clock) as Arc<dyn RuntimeClock> as Arc<dyn Clock + Send + Sync>;
-        let event = EventEmitter::new(event_tx, Arc::clone(&core));
+        let event = EventEmitter::new(event_tx, Arc::clone(&clock));
         Self {
             config,
             capture,
             input,
             perception,
-            clock_rt: clock,
-            clock_core: core,
+            clock,
             cmd_rx,
             event,
             programs: HashMap::new(),
         }
     }
 
+    /// Drive a single tick. Public so scenario tests can step deterministically
+    /// without a live wall-clock loop. Equivalent to one iteration of
+    /// `run_until_shutdown`'s body (minus the sleep).
+    pub fn tick_once_pub(&mut self) {
+        self.drain_commands();
+        self.tick_once();
+    }
+
     /// Main loop. Ticks on each `tick_interval_ms` deadline; returns when a
-    /// `Shutdown` command is observed. Emits `daemon.stopped` on the way out
-    /// so the daemon's persist layer sees a clean trailing event.
+    /// `Shutdown` command is observed. Does NOT emit `daemon.stopped` — that
+    /// is the daemon's responsibility (see `vcli-daemon` `shutdown::emit_daemon_stopped`).
     pub fn run_until_shutdown(mut self) {
         loop {
             if self.drain_commands() {
                 break;
             }
             self.tick_once();
-            self.clock_rt.sleep_ms(self.config.tick_interval_ms);
+            self.clock.sleep_ms(self.config.tick_interval_ms);
         }
-        self.event.emit(EventData::DaemonStopped);
     }
 
     /// Drain pending commands. Returns `true` if a `Shutdown` was observed.
@@ -2419,7 +2445,7 @@ impl Scheduler {
                     if let Some(rp) = self.programs.get_mut(&program_id) {
                         let from = rp.state;
                         rp.state = ProgramState::Running;
-                        rp.running_since_ms = Some(self.clock_core.now_ms());
+                        rp.running_since_ms = Some(self.clock.unix_ms());
                         self.event.emit(EventData::ProgramStateChanged {
                             program_id, from, to: ProgramState::Running, reason: "start".into(),
                         });
@@ -2428,7 +2454,7 @@ impl Scheduler {
                 SchedulerCommand::ResumeRunning { program_id, from_step, program } => {
                     let mut rp = RunningProgram::pending(program_id, program);
                     rp.state = ProgramState::Running;
-                    rp.running_since_ms = Some(self.clock_core.now_ms());
+                    rp.running_since_ms = Some(self.clock.unix_ms());
                     rp.body_cursor = Some(from_step);
                     rp.resumed_from = Some(from_step);
                     self.event.emit(EventData::ProgramStateChanged {
@@ -2600,7 +2626,7 @@ fn tick_once(&mut self) {
     };
     // 2. Wipe per-tick cache.
     self.perception.clear();
-    let now_ms = self.clock_core.now_ms();
+    let now_ms = self.clock.unix_ms();
     let assets: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
 
     // 3. Advance triggers for Waiting programs.
@@ -2714,13 +2740,17 @@ fn tick_once(&mut self) {
     }
 
     // 5. Advance one body step for each Running program.
+    //
+    // BodyState (deferred sleeps, wait_for budgets) persists across ticks — it
+    // lives on `RunningProgram` (see Task 7's `body_state: BodyState` field).
+    // Resetting it per tick would erase in-flight `SleepMs` / `WaitFor`
+    // accumulators, causing them to re-start from 0 every 100 ms.
     for id in running_ids.iter().copied() {
         let rp = self.programs.get_mut(&id).unwrap();
         let cursor = rp.body_cursor.unwrap_or(0);
         let body = rp.program.body.clone();
-        let mut state = crate::body::BodyState::default();
         let outcome = crate::body::step_once(
-            id, &body, cursor, &mut state, &rp.program.predicates,
+            id, &body, cursor, &mut rp.body_state, &rp.program.predicates,
             &frame, now_ms, &assets, &self.perception, &self.input,
         );
         match outcome {

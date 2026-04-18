@@ -17,19 +17,26 @@ The daemon is strict about layering: the synchronous scheduler thread (owned by 
 pub struct Scheduler { /* sync, Send */ }
 impl Scheduler {
     pub fn new(
+        config:     SchedulerConfig,
         capture:    Box<dyn vcli_capture::Capture>,
         input:      std::sync::Arc<dyn vcli_input::InputSink>,
         perception: vcli_perception::Perception,
-        clock:      std::sync::Arc<dyn vcli_core::clock::Clock + Send + Sync>,
+        clock:      std::sync::Arc<dyn vcli_runtime::RuntimeClock>,
         cmd_rx:     crossbeam_channel::Receiver<SchedulerCommand>,
         event_tx:   crossbeam_channel::Sender<vcli_core::Event>,
     ) -> Self;
     pub fn run_until_shutdown(self);
 }
 
+pub struct SchedulerConfig {
+    pub tick_interval_ms: u32,      // default 100
+    pub tick_budget_ms:   u32,      // default 90 — above this emits daemon.pressure
+    pub max_inflight:     usize,    // default 256 concurrent programs
+}
+
 pub enum SchedulerCommand {
     SubmitValidated { program_id: vcli_core::ProgramId, program: vcli_core::Program },
-    Cancel          { program_id: vcli_core::ProgramId },
+    Cancel          { program_id: vcli_core::ProgramId, reason: String },
     Start           { program_id: vcli_core::ProgramId },
     ResumeRunning   { program_id: vcli_core::ProgramId, from_step: u32, program: vcli_core::Program },
     Shutdown,
@@ -70,6 +77,154 @@ vcli/
 **Responsibility split rationale:** `config` + `pidfile` + `logging` are boring infra, each unit-testable in isolation. `bridge` + `persist` are the synchronization primitives shared between the tokio reactor and the sync scheduler thread — kept tiny so their concurrency shape is obvious. `handler` implements the `vcli_ipc::Handler` trait and is the widest seam; one `impl` method per `RequestOp` variant. `startup` + `shutdown` are the two ends of the daemon's lifetime, split so each can be tested without driving `run_foreground()`. `run.rs` is the final assembly; it is thin on purpose so integration tests can replicate it with their own fakes.
 
 No module exceeds ~400 lines.
+
+---
+
+## Task 0: Prerequisite additions to `vcli-core` and `vcli-store`
+
+Two tiny helpers this plan consumes but that aren't on master yet. Lands as **two separate commits** so each is a clean atomic change in its owning crate — then the daemon plan can depend on them from Task 2 onward.
+
+**Files:**
+- Modify: `/Users/admin/Workspace/vcli/crates/vcli-core/src/clock.rs`
+- Modify: `/Users/admin/Workspace/vcli/crates/vcli-store/src/store.rs`
+- Modify: `/Users/admin/Workspace/vcli/crates/vcli-store/src/lib.rs` (re-export if needed)
+
+- [ ] **Step 1 — `vcli-core`: add `now_unix_ms()` free function**
+
+Append to `crates/vcli-core/src/clock.rs` (after `impl Clock for TestClock`):
+
+```rust
+/// Convenience for callers that just want wall-clock ms and do not hold a
+/// `Clock` handle. Equivalent to `SystemClock::new().unix_ms()`. Non-test code
+/// outside the scheduler uses this for event timestamps.
+#[must_use]
+pub fn now_unix_ms() -> UnixMs {
+    SystemClock::new().unix_ms()
+}
+
+#[cfg(test)]
+mod now_unix_ms_tests {
+    use super::*;
+
+    #[test]
+    fn now_unix_ms_is_positive_and_recent() {
+        let t = now_unix_ms();
+        assert!(t > 1_700_000_000_000, "got {t}");
+    }
+}
+```
+
+Also add to `crates/vcli-core/src/lib.rs` re-exports (already has `pub use clock::{Clock, SystemClock, TestClock, UnixMs};` — append `now_unix_ms`):
+
+```rust
+pub use clock::{now_unix_ms, Clock, SystemClock, TestClock, UnixMs};
+```
+
+Run: `cargo test -p vcli-core --lib clock`. Expect new test green.
+Commit: `vcli-core: add now_unix_ms() free-function helper`.
+
+- [ ] **Step 2 — `vcli-store`: add `Store::list_programs(state_filter)`**
+
+Append to `crates/vcli-store/src/store.rs` inside `impl Store`:
+
+```rust
+/// List programs, optionally filtered by a single [`ProgramState`].
+/// Ordered by `submitted_at ASC` then by rowid for stability.
+///
+/// # Errors
+/// Surfaces SQLite errors.
+pub fn list_programs(
+    &self,
+    state_filter: Option<ProgramState>,
+) -> StoreResult<Vec<ProgramRow>> {
+    let state_str = state_filter.map(|s| s.as_str().to_string());
+    let mut stmt = self.conn().prepare(
+        "SELECT id, name, source_json, state, submitted_at, started_at,
+                finished_at, last_error_code, last_error_msg, labels_json,
+                body_cursor, body_entered_at
+         FROM programs
+         WHERE (?1 IS NULL) OR (state = ?1)
+         ORDER BY submitted_at ASC, rowid ASC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![state_str], |r| {
+        let id: String = r.get(0)?;
+        let state: String = r.get(3)?;
+        let body_cursor: i64 = r.get(10)?;
+        Ok(ProgramRow {
+            id: id.parse().unwrap(),
+            name: r.get(1)?,
+            source_json: r.get(2)?,
+            state: state.parse().unwrap(),
+            submitted_at: r.get(4)?,
+            started_at: r.get(5)?,
+            finished_at: r.get(6)?,
+            last_error_code: r.get(7)?,
+            last_error_msg: r.get(8)?,
+            labels_json: r.get(9)?,
+            body_cursor: u32::try_from(body_cursor).unwrap_or(0),
+            body_entered_at: r.get(11)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+```
+
+`ProgramRow` already carries both `body_cursor` and `body_entered_at` (spec §Persistence row shape). The `FromStr for ProgramState` impl is present in `vcli-core::state` (`ProgramStateParseError` is the error type).
+
+Test to append inside the existing `#[cfg(test)] mod tests` of `store.rs`:
+
+```rust
+#[test]
+fn list_programs_returns_all_when_no_filter() {
+    let d = tempdir().unwrap();
+    let (mut s, _) = Store::open(d.path()).unwrap();
+    for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
+        s.insert_program(&NewProgram {
+            id: ProgramId::new(),
+            name,
+            source_json: "{}",
+            state: ProgramState::Pending,
+            submitted_at: i as i64,
+            labels_json: "{}",
+        })
+        .unwrap();
+    }
+    let all = s.list_programs(None).unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].name, "a");
+}
+
+#[test]
+fn list_programs_filters_by_state() {
+    let d = tempdir().unwrap();
+    let (mut s, _) = Store::open(d.path()).unwrap();
+    let running = ProgramId::new();
+    let pending = ProgramId::new();
+    for (id, name) in [(running, "r"), (pending, "p")] {
+        s.insert_program(&NewProgram {
+            id, name, source_json: "{}",
+            state: ProgramState::Pending,
+            submitted_at: 0, labels_json: "{}",
+        })
+        .unwrap();
+    }
+    s.update_state(running, ProgramState::Running, 100).unwrap();
+    let runs = s.list_programs(Some(ProgramState::Running)).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].name, "r");
+}
+```
+
+Run: `cargo test -p vcli-store --lib store`. Expect both new tests green.
+Commit: `vcli-store: Store::list_programs with optional state filter`.
+
+- [ ] **Step 3 — Full workspace gate still green**
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
 
 ---
 
@@ -930,7 +1085,10 @@ mod tests {
         let chan2 = chan.clone();
         chan2
             .cmd_tx
-            .send(SchedulerCommand::Cancel { program_id: ProgramId::new() })
+            .send(SchedulerCommand::Cancel {
+                program_id: ProgramId::new(),
+                reason: "test".into(),
+            })
             .unwrap();
         match cmd_rx.recv().unwrap() {
             SchedulerCommand::Cancel { .. } => {}
@@ -1363,19 +1521,23 @@ Add to `impl DaemonHandler` above `handle`:
 
 ```rust
 async fn handle_submit(&self, id: RequestId, program_json: serde_json::Value) -> Response {
-    // Validate via vcli-dsl (pure).
-    let program = match vcli_dsl::parse_value(&program_json) {
-        Ok(p) => p,
+    // Validate via vcli-dsl. `validate_value` returns a `Validated` whose
+    // `.program` is `vcli_core::Program`.
+    let program = match vcli_dsl::validate_value(&program_json) {
+        Ok(v) => v.program,
         Err(e) => {
-            return Response::err(id, ErrorPayload::from(e));
+            // DslError exposes a ready-made wire payload — use it.
+            return Response::err(id, e.to_payload());
         }
     };
 
     // Assign program id.
     let program_id = program.id.unwrap_or_else(ProgramId::new);
     let name = program.name.clone();
-    let canonical = match vcli_core::canonicalize(&program_json) {
-        Ok(s) => s,
+    // `vcli_core::canonicalize` returns `Vec<u8>` (UTF-8 JSON bytes by
+    // construction). Convert to String for the store row.
+    let canonical_bytes = match vcli_core::canonicalize(&program_json) {
+        Ok(b) => b,
         Err(e) => {
             return Response::err(
                 id,
@@ -1383,6 +1545,8 @@ async fn handle_submit(&self, id: RequestId, program_json: serde_json::Value) ->
             );
         }
     };
+    let canonical = String::from_utf8(canonical_bytes)
+        .expect("canonicalize produces UTF-8 by construction");
 
     // Insert into store off the async executor.
     let store = self.store.clone();
@@ -1435,7 +1599,7 @@ Extend the `match op` in `handle` to dispatch `Submit`:
 RequestOp::Submit { program } => self.handle_submit(id, program).await,
 ```
 
-Also ensure `vcli_dsl::parse_value(&serde_json::Value) -> Result<Program, DslError>` exists — if its real name is `parse` or `parse_json`, fix inline per AGENT.md. `ErrorPayload::from(DslError)` is assumed to exist in vcli-dsl. If the conversion lives elsewhere, wrap with a manual `ErrorPayload::from_dsl_error(&e)` helper.
+`DslError::to_payload()` (defined in `vcli-dsl/src/error.rs`) already builds the correct `ErrorPayload` with `code: InvalidProgram`, the JSON path, and an optional `hint`. Call it directly — no local helper needed.
 
 - [ ] **Step 3: Run test**
 
@@ -1624,7 +1788,10 @@ async fn start_sends_command_and_returns_ok() {
 
 ```rust
 async fn handle_cancel(&self, id: RequestId, pid: ProgramId) -> Response {
-    match self.bridge.cmd_tx.send(SchedulerCommand::Cancel { program_id: pid }) {
+    match self.bridge.cmd_tx.send(SchedulerCommand::Cancel {
+        program_id: pid,
+        reason: "user".into(),
+    }) {
         Ok(()) => Response::ok(id, serde_json::json!({ "program_id": pid.to_string() })),
         Err(_) => Response::err(
             id,
@@ -1723,12 +1890,12 @@ async fn handle_resume(&self, id: RequestId, pid: ProgramId, from_start: bool) -
         let row = s.get_program(pid)?;
         let value: serde_json::Value = serde_json::from_str(&row.source_json)
             .map_err(|e| vcli_store::StoreError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(e))))?;
-        let program = vcli_dsl::parse_value(&value).map_err(|e| {
-            vcli_store::StoreError::Io {
+        let program = vcli_dsl::validate_value(&value)
+            .map(|v| v.program)
+            .map_err(|e| vcli_store::StoreError::Io {
                 path: "<dsl>".into(),
                 source: std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}")),
-            }
-        })?;
+            })?;
         Ok::<_, vcli_store::StoreError>((outcome, program))
     })
     .await;
@@ -2078,7 +2245,7 @@ pub fn reload_waiting_programs(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.source_json) else {
             continue;
         };
-        let Ok(program) = vcli_dsl::parse_value(&value) else {
+        let Ok(program) = vcli_dsl::validate_value(&value).map(|v| v.program) else {
             continue;
         };
         if cmd_tx
@@ -2302,8 +2469,10 @@ pub struct RuntimeBackends {
     pub input: Arc<dyn InputSink>,
     /// Perception façade.
     pub perception: Perception,
-    /// Clock (usually `SystemClock`).
-    pub clock: Arc<dyn vcli_core::clock::Clock + Send + Sync>,
+    /// Runtime clock (usually `vcli_runtime::SystemRuntimeClock`). The runtime
+    /// crate exposes its own `RuntimeClock` trait because Rust 1.75 lacks
+    /// trait-object upcasting, so we cannot pass a `vcli_core::Clock` here.
+    pub clock: Arc<dyn vcli_runtime::RuntimeClock>,
 }
 
 /// Function that produces `RuntimeBackends` at startup. Lets tests inject
@@ -2348,6 +2517,7 @@ pub async fn run_foreground(cfg: Config, factory: RuntimeFactory) -> DaemonResul
         .name("vcli-scheduler".into())
         .spawn(move || {
             let scheduler = vcli_runtime::Scheduler::new(
+                vcli_runtime::SchedulerConfig::default(),
                 capture,
                 input,
                 perception,
@@ -2501,10 +2671,10 @@ fn default_runtime_factory() -> Result<RuntimeBackends, DaemonError> {
     }
     let capture: Box<dyn vcli_capture::Capture + Send> = Box::new(vcli_capture::MockCapture::empty());
     let input: std::sync::Arc<dyn vcli_input::InputSink> =
-        std::sync::Arc::new(vcli_input::MockInputSink::new(vcli_input::KillSwitch::default()));
+        std::sync::Arc::new(vcli_input::MockInputSink::new());
     let perception = vcli_perception::Perception::default();
-    let clock: std::sync::Arc<dyn vcli_core::clock::Clock + Send + Sync> =
-        std::sync::Arc::new(vcli_core::clock::SystemClock);
+    let clock: std::sync::Arc<dyn vcli_runtime::RuntimeClock> =
+        std::sync::Arc::new(vcli_runtime::SystemRuntimeClock::new());
     Ok(RuntimeBackends { capture, input, perception, clock })
 }
 ```
@@ -2553,9 +2723,9 @@ use vcli_store::{NewProgram, Store};
 fn noop_backends() -> Result<RuntimeBackends, vcli_daemon::DaemonError> {
     Ok(RuntimeBackends {
         capture: Box::new(vcli_capture::MockCapture::empty()),
-        input: Arc::new(vcli_input::MockInputSink::new(vcli_input::KillSwitch::default())),
+        input: Arc::new(vcli_input::MockInputSink::new()),
         perception: vcli_perception::Perception::default(),
-        clock: Arc::new(vcli_core::clock::SystemClock),
+        clock: Arc::new(vcli_runtime::SystemRuntimeClock::new()),
     })
 }
 
@@ -2665,9 +2835,9 @@ use vcli_ipc::{IpcClient, RequestOp, ResponseBody};
 fn mocks() -> Result<RuntimeBackends, vcli_daemon::DaemonError> {
     Ok(RuntimeBackends {
         capture: Box::new(vcli_capture::MockCapture::empty()),
-        input: Arc::new(vcli_input::MockInputSink::new(vcli_input::KillSwitch::default())),
+        input: Arc::new(vcli_input::MockInputSink::new()),
         perception: vcli_perception::Perception::default(),
-        clock: Arc::new(vcli_core::clock::SystemClock),
+        clock: Arc::new(vcli_runtime::SystemRuntimeClock::new()),
     })
 }
 
@@ -2755,9 +2925,9 @@ use vcli_ipc::{IpcClient, RequestOp, ResponseBody};
 fn mocks() -> Result<RuntimeBackends, vcli_daemon::DaemonError> {
     Ok(RuntimeBackends {
         capture: Box::new(vcli_capture::MockCapture::empty()),
-        input: Arc::new(vcli_input::MockInputSink::new(vcli_input::KillSwitch::default())),
+        input: Arc::new(vcli_input::MockInputSink::new()),
         perception: vcli_perception::Perception::default(),
-        clock: Arc::new(vcli_core::clock::SystemClock),
+        clock: Arc::new(vcli_runtime::SystemRuntimeClock::new()),
     })
 }
 
@@ -2840,7 +3010,7 @@ If no fixes were required, skip this commit.
 - **Runtime API drift.** If `vcli-runtime`'s real `Scheduler::new` signature differs from this plan's assumption, adapt the calls in `run::run_foreground` and Task 14's test helper inline. Everything else in this plan is self-contained.
 - **MockCapture / MockInputSink.** Both already exist (see `crates/vcli-capture/src/mock.rs` and `crates/vcli-input/src/mock.rs`). The integration tests here use them unchanged; if their constructor signatures evolve, update Task 12–15 test helpers.
 - **`Store::list_programs`.** Task 8c + Task 9 assume this exists; if it doesn't yet, add it via a preparatory one-commit PR to vcli-store before starting Task 8c. The function is a one-liner: `SELECT id, name, state, submitted_at, ... FROM programs WHERE state = ?1 OR ?1 IS NULL`.
-- **`vcli_dsl::parse_value`.** If the DSL crate's top-level parse entrypoint is named differently (e.g. `parse`, `from_value`, `parse_program`), replace inline — the intent is `serde_json::Value → Result<Program, DslError>`.
+- **`vcli_dsl::validate_value`.** Real entrypoint; returns `Validated { program, hashes }`. Call sites in this plan use `.map(|v| v.program)` to extract the Program. If the crate gains a pure-parse-without-validation entry later, the daemon still wants validation, so keep `validate_value`.
 - **`ErrorPayload::from(DslError)`.** If the impl doesn't exist, add a trivial `From<vcli_dsl::DslError> for ErrorPayload` in vcli-dsl as its own task 0, or inline-build the payload from the error's `line` / `column` / `path` / `message` fields.
 - **Why tempfile in pidfile.rs.** The `release()` method drops the lock by swapping the file out. A cleaner alternative is `file: Option<File>` + `self.file = None`. Both compile; pick whichever reads cleaner during implementation.
 - **No `vcli daemon start` subcommand.** That's the CLI's job (out of scope here). This crate only ships `vcli-daemon` = the foreground binary launchd/systemd invoke; the CLI will `std::process::Command` it and detach.
