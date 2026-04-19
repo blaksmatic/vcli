@@ -33,9 +33,9 @@ pub fn parse(s: &str) -> Result<ParsedExpr<'_>, RuntimeError> {
     let rest = s
         .strip_prefix('$')
         .ok_or_else(|| RuntimeError::ExpressionUnresolved(format!("expected '$' prefix: {s}")))?;
-    let (pred, tail) = rest
-        .split_once('.')
-        .ok_or_else(|| RuntimeError::ExpressionUnresolved(format!("expected '.<accessor>': {s}")))?;
+    let (pred, tail) = rest.split_once('.').ok_or_else(|| {
+        RuntimeError::ExpressionUnresolved(format!("expected '.<accessor>': {s}"))
+    })?;
     if pred.is_empty() {
         return Err(RuntimeError::ExpressionUnresolved(format!(
             "empty predicate name: {s}"
@@ -50,7 +50,10 @@ pub fn parse(s: &str) -> Result<ParsedExpr<'_>, RuntimeError> {
             )));
         }
     };
-    Ok(ParsedExpr { predicate: pred, accessor })
+    Ok(ParsedExpr {
+        predicate: pred,
+        accessor,
+    })
 }
 
 /// Resolve a parsed expression's center against a predicate result.
@@ -128,7 +131,12 @@ mod tests {
             truthy: true,
             at: 0,
             match_data: Some(MatchData {
-                bbox: Rect { x: 10, y: 20, w: 40, h: 20 },
+                bbox: Rect {
+                    x: 10,
+                    y: 20,
+                    w: 40,
+                    h: 20,
+                },
                 confidence: Confidence(0.9),
             }),
         };
@@ -137,7 +145,11 @@ mod tests {
 
     #[test]
     fn resolve_without_match_data_errors() {
-        let r = PredicateResult { truthy: true, at: 0, match_data: None };
+        let r = PredicateResult {
+            truthy: true,
+            at: 0,
+            match_data: None,
+        };
         assert!(resolve_center(&r).is_err());
     }
 }

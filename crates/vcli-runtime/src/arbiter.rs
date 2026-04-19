@@ -91,20 +91,39 @@ mod tests {
     #[test]
     fn higher_priority_wins() {
         let out = resolve(vec![
-            Candidate { program_id: id(1), priority: Priority(0), payload: "a" },
-            Candidate { program_id: id(2), priority: Priority(5), payload: "b" },
+            Candidate {
+                program_id: id(1),
+                priority: Priority(0),
+                payload: "a",
+            },
+            Candidate {
+                program_id: id(2),
+                priority: Priority(5),
+                payload: "b",
+            },
         ]);
         let dispatched: Vec<_> = out.iter().filter(|d| d.dispatch).collect();
         assert_eq!(dispatched.len(), 1);
         assert_eq!(dispatched[0].program_id, id(2));
-        assert_eq!(out.iter().find(|d| !d.dispatch).unwrap().loser_of, Some(id(2)));
+        assert_eq!(
+            out.iter().find(|d| !d.dispatch).unwrap().loser_of,
+            Some(id(2))
+        );
     }
 
     #[test]
     fn tie_breaks_by_program_id_lex_desc() {
         let out = resolve(vec![
-            Candidate { program_id: id(1), priority: Priority(0), payload: "a" },
-            Candidate { program_id: id(2), priority: Priority(0), payload: "b" },
+            Candidate {
+                program_id: id(1),
+                priority: Priority(0),
+                payload: "a",
+            },
+            Candidate {
+                program_id: id(2),
+                priority: Priority(0),
+                payload: "b",
+            },
         ]);
         let winner = out.iter().find(|d| d.dispatch).unwrap().program_id;
         assert_eq!(winner, id(2));
@@ -113,9 +132,21 @@ mod tests {
     #[test]
     fn three_way_drops_two_losers() {
         let out = resolve(vec![
-            Candidate { program_id: id(1), priority: Priority(3), payload: "a" },
-            Candidate { program_id: id(2), priority: Priority(3), payload: "b" },
-            Candidate { program_id: id(3), priority: Priority(3), payload: "c" },
+            Candidate {
+                program_id: id(1),
+                priority: Priority(3),
+                payload: "a",
+            },
+            Candidate {
+                program_id: id(2),
+                priority: Priority(3),
+                payload: "b",
+            },
+            Candidate {
+                program_id: id(3),
+                priority: Priority(3),
+                payload: "c",
+            },
         ]);
         let dispatched: Vec<_> = out.iter().filter(|d| d.dispatch).collect();
         assert_eq!(dispatched.len(), 1);

@@ -105,7 +105,10 @@ impl Scheduler {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
                 SchedulerCommand::Shutdown => return true,
-                SchedulerCommand::SubmitValidated { program_id, program } => {
+                SchedulerCommand::SubmitValidated {
+                    program_id,
+                    program,
+                } => {
                     let mut rp = RunningProgram::pending(program_id, program);
                     rp.state = ProgramState::Waiting;
                     self.event.emit(EventData::ProgramSubmitted {
@@ -161,7 +164,10 @@ impl Scheduler {
                         to: ProgramState::Running,
                         reason: "resume".into(),
                     });
-                    self.event.emit(EventData::ProgramResumed { program_id, from_step });
+                    self.event.emit(EventData::ProgramResumed {
+                        program_id,
+                        from_step,
+                    });
                     self.programs.insert(program_id, rp);
                 }
             }
@@ -183,8 +189,7 @@ impl Scheduler {
         };
         self.perception.clear();
         let now_ms = self.clock.unix_ms();
-        let assets: std::collections::BTreeMap<String, Vec<u8>> =
-            std::collections::BTreeMap::new();
+        let assets: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
 
         let waiting: Vec<ProgramId> = self
             .programs
@@ -277,7 +282,12 @@ impl Scheduler {
                         let key = format!("__inline_{idx}");
                         tmp.insert(key.clone(), *p.clone());
                         match self.perception.evaluate_named(
-                            &key, &tmp, &frame, now_ms, &assets, Some(id),
+                            &key,
+                            &tmp,
+                            &frame,
+                            now_ms,
+                            &assets,
+                            Some(id),
                         ) {
                             Ok(r) => r.truthy,
                             Err(e) => {
@@ -365,8 +375,10 @@ impl Scheduler {
                             to: ProgramState::Completed,
                             reason: "body_complete".into(),
                         });
-                        self.event
-                            .emit(EventData::ProgramCompleted { program_id: id, emit });
+                        self.event.emit(EventData::ProgramCompleted {
+                            program_id: id,
+                            emit,
+                        });
                     }
                 }
                 crate::body::StepOutcome::Stalled => {}
@@ -380,8 +392,10 @@ impl Scheduler {
                             to: ProgramState::Completed,
                             reason: "body_complete".into(),
                         });
-                        self.event
-                            .emit(EventData::ProgramCompleted { program_id: id, emit });
+                        self.event.emit(EventData::ProgramCompleted {
+                            program_id: id,
+                            emit,
+                        });
                     }
                 }
                 crate::body::StepOutcome::Failed(err) => {
@@ -425,7 +439,12 @@ mod tests {
         fn grab_screen(&mut self) -> Result<Frame, CaptureError> {
             Ok(Frame::new(
                 FrameFormat::Rgba8,
-                Rect { x: 0, y: 0, w: 1, h: 1 },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                },
                 4,
                 std::sync::Arc::from(vec![0u8, 0, 0, 0]),
                 0,

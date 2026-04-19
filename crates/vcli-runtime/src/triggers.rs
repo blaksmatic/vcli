@@ -47,7 +47,12 @@ mod tests {
     fn red_frame() -> Frame {
         Frame::new(
             FrameFormat::Rgba8,
-            Rect { x: 0, y: 0, w: 1, h: 1 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
             4,
             Arc::from(vec![255u8, 0, 0, 255]),
             0,
@@ -63,7 +68,16 @@ mod tests {
         let preds = BTreeMap::new();
         let assets = BTreeMap::new();
         let p = Perception::new();
-        let out = trigger_fires(&Trigger::OnSubmit, &preds, &red_frame(), 0, &assets, &p, some_id()).unwrap();
+        let out = trigger_fires(
+            &Trigger::OnSubmit,
+            &preds,
+            &red_frame(),
+            0,
+            &assets,
+            &p,
+            some_id(),
+        )
+        .unwrap();
         assert!(out);
     }
 
@@ -72,7 +86,16 @@ mod tests {
         let preds = BTreeMap::new();
         let assets = BTreeMap::new();
         let p = Perception::new();
-        let out = trigger_fires(&Trigger::Manual, &preds, &red_frame(), 0, &assets, &p, some_id()).unwrap();
+        let out = trigger_fires(
+            &Trigger::Manual,
+            &preds,
+            &red_frame(),
+            0,
+            &assets,
+            &p,
+            some_id(),
+        )
+        .unwrap();
         assert!(!out);
     }
 
@@ -90,14 +113,17 @@ mod tests {
         let assets = BTreeMap::new();
         let p = Perception::new();
         let out = trigger_fires(
-            &Trigger::OnPredicate { name: "is_red".into() },
+            &Trigger::OnPredicate {
+                name: "is_red".into(),
+            },
             &preds,
             &red_frame(),
             100,
             &assets,
             &p,
             some_id(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(out);
     }
 
@@ -107,7 +133,9 @@ mod tests {
         let assets = BTreeMap::new();
         let p = Perception::new();
         let out = trigger_fires(
-            &Trigger::OnPredicate { name: "nope".into() },
+            &Trigger::OnPredicate {
+                name: "nope".into(),
+            },
             &preds,
             &red_frame(),
             0,

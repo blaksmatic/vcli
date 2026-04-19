@@ -27,7 +27,10 @@ impl EventEmitter {
     /// ignores the return value and keeps running; the daemon drains
     /// remaining events after joining the scheduler thread.
     pub fn emit(&self, data: EventData) -> bool {
-        let ev = Event { at: self.clock.unix_ms(), data };
+        let ev = Event {
+            at: self.clock.unix_ms(),
+            data,
+        };
         self.tx.send(ev).is_ok()
     }
 }
@@ -48,7 +51,10 @@ mod tests {
         let (tx, rx) = unbounded::<Event>();
         let clock: Arc<dyn RuntimeClock> = Arc::new(ManualClock::new(12_345));
         let em = EventEmitter::new(tx, clock);
-        assert!(em.emit(EventData::ProgramSubmitted { program_id: sample_id(), name: "x".into() }));
+        assert!(em.emit(EventData::ProgramSubmitted {
+            program_id: sample_id(),
+            name: "x".into()
+        }));
         let ev = rx.recv().unwrap();
         assert_eq!(ev.at, 12_345);
     }

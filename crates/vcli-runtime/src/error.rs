@@ -34,16 +34,16 @@ impl ErrorCode {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::CaptureFailed         => "capture_failed",
-            Self::InputFailed           => "input_failed",
-            Self::PerceptionFailed      => "perception_failed",
-            Self::WaitForTimeout        => "wait_for_timeout",
-            Self::AssertFailed          => "assert_failed",
-            Self::ProgramTimeout        => "program_timeout",
-            Self::NoveltyTimeout        => "novelty_timeout",
-            Self::ExpressionUnresolved  => "expression_unresolved",
-            Self::DaemonRestart         => "daemon_restart",
-            Self::Internal              => "internal",
+            Self::CaptureFailed => "capture_failed",
+            Self::InputFailed => "input_failed",
+            Self::PerceptionFailed => "perception_failed",
+            Self::WaitForTimeout => "wait_for_timeout",
+            Self::AssertFailed => "assert_failed",
+            Self::ProgramTimeout => "program_timeout",
+            Self::NoveltyTimeout => "novelty_timeout",
+            Self::ExpressionUnresolved => "expression_unresolved",
+            Self::DaemonRestart => "daemon_restart",
+            Self::Internal => "internal",
         }
     }
 }
@@ -99,15 +99,15 @@ impl RuntimeError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Capture(_)              => ErrorCode::CaptureFailed,
-            Self::Input(_)                => ErrorCode::InputFailed,
-            Self::Perception(_)           => ErrorCode::PerceptionFailed,
-            Self::WaitForTimeout { .. }   => ErrorCode::WaitForTimeout,
-            Self::AssertFailed   { .. }   => ErrorCode::AssertFailed,
-            Self::ProgramTimeout { .. }   => ErrorCode::ProgramTimeout,
-            Self::NoveltyTimeout { .. }   => ErrorCode::NoveltyTimeout,
+            Self::Capture(_) => ErrorCode::CaptureFailed,
+            Self::Input(_) => ErrorCode::InputFailed,
+            Self::Perception(_) => ErrorCode::PerceptionFailed,
+            Self::WaitForTimeout { .. } => ErrorCode::WaitForTimeout,
+            Self::AssertFailed { .. } => ErrorCode::AssertFailed,
+            Self::ProgramTimeout { .. } => ErrorCode::ProgramTimeout,
+            Self::NoveltyTimeout { .. } => ErrorCode::NoveltyTimeout,
             Self::ExpressionUnresolved(_) => ErrorCode::ExpressionUnresolved,
-            Self::Internal(_)             => ErrorCode::Internal,
+            Self::Internal(_) => ErrorCode::Internal,
         }
     }
 }
@@ -125,7 +125,10 @@ mod tests {
 
     #[test]
     fn runtime_error_maps_to_code() {
-        let e = RuntimeError::WaitForTimeout { predicate: "p".into(), waited_ms: 1000 };
+        let e = RuntimeError::WaitForTimeout {
+            predicate: "p".into(),
+            waited_ms: 1000,
+        };
         assert_eq!(e.code(), ErrorCode::WaitForTimeout);
         assert_eq!(e.code().as_str(), "wait_for_timeout");
     }

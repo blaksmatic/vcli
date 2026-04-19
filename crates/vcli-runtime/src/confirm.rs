@@ -46,7 +46,14 @@ pub fn step(
     perception: &Perception,
 ) -> Result<ConfirmOutcome, RuntimeError> {
     let r = perception
-        .evaluate_named(&pc.predicate, predicates, frame, now_ms, assets, Some(pc.program_id))
+        .evaluate_named(
+            &pc.predicate,
+            predicates,
+            frame,
+            now_ms,
+            assets,
+            Some(pc.program_id),
+        )
         .map_err(|e| RuntimeError::Perception(e.to_string()))?;
     if r.truthy {
         return Ok(ConfirmOutcome::Success);
@@ -68,7 +75,12 @@ mod tests {
     fn red_frame() -> Frame {
         Frame::new(
             FrameFormat::Rgba8,
-            Rect { x: 0, y: 0, w: 1, h: 1 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
             4,
             Arc::from(vec![255u8, 0, 0, 255]),
             0,

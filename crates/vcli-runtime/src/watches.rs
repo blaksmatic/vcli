@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn skips_on_level_high() {
         let w = mk_watch(Lifetime::Persistent, 0);
-        let st = WatchRuntime { last_truthy: true, ..Default::default() };
+        let st = WatchRuntime {
+            last_truthy: true,
+            ..Default::default()
+        };
         assert_eq!(decide(&w, &st, true, 100, 0), WatchDecision::Skip);
     }
 
@@ -128,7 +131,10 @@ mod tests {
     #[test]
     fn retired_watch_is_inert() {
         let w = mk_watch(Lifetime::Persistent, 0);
-        let st = WatchRuntime { retired: true, ..Default::default() };
+        let st = WatchRuntime {
+            retired: true,
+            ..Default::default()
+        };
         assert_eq!(decide(&w, &st, true, 100, 0), WatchDecision::Skip);
     }
 }

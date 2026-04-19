@@ -25,21 +25,25 @@ pub fn validate(from: ProgramState, to: ProgramState) -> Result<(), TransitionEr
     use ProgramState::{Blocked, Cancelled, Completed, Failed, Pending, Running, Waiting};
     let ok = matches!(
         (from, to),
-        (Pending,   Waiting)
-      | (Pending,   Cancelled)
-      | (Waiting,   Running)
-      | (Waiting,   Cancelled)
-      | (Waiting,   Failed)
-      | (Running,   Blocked)
-      | (Running,   Completed)
-      | (Running,   Failed)
-      | (Running,   Cancelled)
-      | (Blocked,   Running)
-      | (Blocked,   Cancelled)
-      | (Blocked,   Failed)
-      | (Failed,    Running)
+        (Pending, Waiting)
+            | (Pending, Cancelled)
+            | (Waiting, Running)
+            | (Waiting, Cancelled)
+            | (Waiting, Failed)
+            | (Running, Blocked)
+            | (Running, Completed)
+            | (Running, Failed)
+            | (Running, Cancelled)
+            | (Blocked, Running)
+            | (Blocked, Cancelled)
+            | (Blocked, Failed)
+            | (Failed, Running)
     );
-    if ok { Ok(()) } else { Err(TransitionError::Illegal { from, to }) }
+    if ok {
+        Ok(())
+    } else {
+        Err(TransitionError::Illegal { from, to })
+    }
 }
 
 #[cfg(test)]

@@ -16,14 +16,17 @@ impl BudgetGate {
     /// Create with `budget_ms`.
     #[must_use]
     pub fn new(budget_ms: u32) -> Self {
-        Self { budget_ms, deadline: None, overrun_streak: 0 }
+        Self {
+            budget_ms,
+            deadline: None,
+            overrun_streak: 0,
+        }
     }
 
     /// Start a new tick. Call at the top of `tick()`.
     pub fn start_tick(&mut self) {
-        self.deadline = Some(
-            Instant::now() + std::time::Duration::from_millis(u64::from(self.budget_ms)),
-        );
+        self.deadline =
+            Some(Instant::now() + std::time::Duration::from_millis(u64::from(self.budget_ms)));
     }
 
     /// Whether the current tick has exceeded its budget.

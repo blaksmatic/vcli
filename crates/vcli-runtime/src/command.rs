@@ -68,7 +68,10 @@ mod tests {
     #[test]
     fn submit_variant_roundtrips_basic_shape() {
         let id: ProgramId = "12345678-1234-4567-8910-111213141516".parse().unwrap();
-        let c = SchedulerCommand::SubmitValidated { program_id: id, program: sample_program() };
+        let c = SchedulerCommand::SubmitValidated {
+            program_id: id,
+            program: sample_program(),
+        };
         match c {
             SchedulerCommand::SubmitValidated { program_id, .. } => assert_eq!(program_id, id),
             _ => panic!("wrong variant"),
@@ -78,7 +81,10 @@ mod tests {
     #[test]
     fn cancel_keeps_reason_untouched() {
         let id: ProgramId = "00000000-0000-4000-8000-000000000000".parse().unwrap();
-        let c = SchedulerCommand::Cancel { program_id: id, reason: "user".into() };
+        let c = SchedulerCommand::Cancel {
+            program_id: id,
+            reason: "user".into(),
+        };
         match c {
             SchedulerCommand::Cancel { reason, .. } => assert_eq!(reason, "user"),
             _ => panic!("wrong variant"),

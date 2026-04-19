@@ -34,8 +34,8 @@ where
     for p in iter {
         let v = serde_json::to_value(p)
             .map_err(|e| RuntimeError::Internal(format!("serialize pred: {e}")))?;
-        let hash = predicate_hash(&v)
-            .map_err(|e| RuntimeError::Internal(format!("hash pred: {e}")))?;
+        let hash =
+            predicate_hash(&v).map_err(|e| RuntimeError::Internal(format!("hash pred: {e}")))?;
         if seen.insert(hash.clone()) {
             out.push(DedupEntry { hash, predicate: p });
         }

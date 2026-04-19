@@ -79,9 +79,18 @@ pub fn step_once(
                 }
                 return StepOutcome::Stalled;
             }
-            BodyDefer::WaitFor { predicate, deadline_ms, on_timeout } => {
+            BodyDefer::WaitFor {
+                predicate,
+                deadline_ms,
+                on_timeout,
+            } => {
                 let r = match perception.evaluate_named(
-                    &predicate, predicates, frame, now_ms, assets, Some(program_id),
+                    &predicate,
+                    predicates,
+                    frame,
+                    now_ms,
+                    assets,
+                    Some(program_id),
                 ) {
                     Ok(r) => r,
                     Err(e) => return StepOutcome::Failed(RuntimeError::Perception(e.to_string())),
@@ -116,7 +125,11 @@ pub fn step_once(
             });
             StepOutcome::Stalled
         }
-        Step::WaitFor { predicate, timeout_ms, on_timeout } => {
+        Step::WaitFor {
+            predicate,
+            timeout_ms,
+            on_timeout,
+        } => {
             state.deferred = Some(BodyDefer::WaitFor {
                 predicate: predicate.clone(),
                 deadline_ms: now_ms.saturating_add(UnixMs::from(*timeout_ms)),
@@ -126,7 +139,12 @@ pub fn step_once(
         }
         Step::Assert { predicate, on_fail } => {
             let r = match perception.evaluate_named(
-                predicate, predicates, frame, now_ms, assets, Some(program_id),
+                predicate,
+                predicates,
+                frame,
+                now_ms,
+                assets,
+                Some(program_id),
             ) {
                 Ok(r) => r,
                 Err(e) => return StepOutcome::Failed(RuntimeError::Perception(e.to_string())),
@@ -142,17 +160,50 @@ pub fn step_once(
                 }
             }
         }
-        Step::Move { at } => dispatch_at(at, predicates, frame, now_ms, assets, perception, program_id, |p| {
-            input.mouse_move(p).map_err(|e| RuntimeError::Input(e.to_string()))
-        }),
-        Step::Click { at, button } => dispatch_at(at, predicates, frame, now_ms, assets, perception, program_id, |p| {
-            input.click(p, *button, &[], 0).map_err(|e| RuntimeError::Input(e.to_string()))
-        }),
+        Step::Move { at } => dispatch_at(
+            at,
+            predicates,
+            frame,
+            now_ms,
+            assets,
+            perception,
+            program_id,
+            |p| {
+                input
+                    .mouse_move(p)
+                    .map_err(|e| RuntimeError::Input(e.to_string()))
+            },
+        ),
+        Step::Click { at, button } => dispatch_at(
+            at,
+            predicates,
+            frame,
+            now_ms,
+            assets,
+            perception,
+            program_id,
+            |p| {
+                input
+                    .click(p, *button, &[], 0)
+                    .map_err(|e| RuntimeError::Input(e.to_string()))
+            },
+        ),
         Step::Scroll { at, dx, dy } => {
             let _ = (dx, dy);
-            dispatch_at(at, predicates, frame, now_ms, assets, perception, program_id, |p| {
-                input.mouse_move(p).map_err(|e| RuntimeError::Input(e.to_string()))
-            })
+            dispatch_at(
+                at,
+                predicates,
+                frame,
+                now_ms,
+                assets,
+                perception,
+                program_id,
+                |p| {
+                    input
+                        .mouse_move(p)
+                        .map_err(|e| RuntimeError::Input(e.to_string()))
+                },
+            )
         }
         Step::Type { text } => match input.type_text(text) {
             Ok(()) => StepOutcome::Advanced,
@@ -184,10 +235,17 @@ where
         Target::Expression(s) => match expr::parse(s) {
             Ok(e) => {
                 let r = match perception.evaluate_named(
-                    e.predicate, predicates, frame, now_ms, assets, Some(program_id),
+                    e.predicate,
+                    predicates,
+                    frame,
+                    now_ms,
+                    assets,
+                    Some(program_id),
                 ) {
                     Ok(r) => r,
-                    Err(e2) => return StepOutcome::Failed(RuntimeError::Perception(e2.to_string())),
+                    Err(e2) => {
+                        return StepOutcome::Failed(RuntimeError::Perception(e2.to_string()))
+                    }
                 };
                 match e.accessor {
                     expr::Accessor::MatchCenter => match expr::resolve_center(&r) {
@@ -220,7 +278,12 @@ mod tests {
     fn blank_frame() -> Frame {
         Frame::new(
             FrameFormat::Rgba8,
-            Rect { x: 0, y: 0, w: 1, h: 1 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
             4,
             Arc::from(vec![0u8, 0, 0, 0]),
             0,
@@ -275,7 +338,18 @@ mod tests {
             at: Target::Absolute(Point { x: 1, y: 2 }),
             button: Button::Left,
         }];
-        let out = step_once(id(), &body, 0, &mut st, &preds, &blank_frame(), 0, &assets, &p, &input);
+        let out = step_once(
+            id(),
+            &body,
+            0,
+            &mut st,
+            &preds,
+            &blank_frame(),
+            0,
+            &assets,
+            &p,
+            &input,
+        );
         assert!(matches!(out, StepOutcome::Advanced));
     }
 
@@ -287,9 +361,31 @@ mod tests {
         let input: Arc<dyn InputSink> = Arc::new(NopSink);
         let mut st = BodyState::default();
         let body = vec![Step::SleepMs { ms: 100 }];
-        let out = step_once(id(), &body, 0, &mut st, &preds, &blank_frame(), 0, &assets, &p, &input);
+        let out = step_once(
+            id(),
+            &body,
+            0,
+            &mut st,
+            &preds,
+            &blank_frame(),
+            0,
+            &assets,
+            &p,
+            &input,
+        );
         assert!(matches!(out, StepOutcome::Stalled));
-        let out2 = step_once(id(), &body, 0, &mut st, &preds, &blank_frame(), 200, &assets, &p, &input);
+        let out2 = step_once(
+            id(),
+            &body,
+            0,
+            &mut st,
+            &preds,
+            &blank_frame(),
+            200,
+            &assets,
+            &p,
+            &input,
+        );
         assert!(matches!(out2, StepOutcome::Advanced));
     }
 
@@ -313,8 +409,22 @@ mod tests {
             predicate: "blue".into(),
             on_fail: OnFail::Fail,
         }];
-        let out = step_once(id(), &body, 0, &mut st, &preds, &blank_frame(), 0, &assets, &p, &input);
-        assert!(matches!(out, StepOutcome::Failed(RuntimeError::AssertFailed { .. })));
+        let out = step_once(
+            id(),
+            &body,
+            0,
+            &mut st,
+            &preds,
+            &blank_frame(),
+            0,
+            &assets,
+            &p,
+            &input,
+        );
+        assert!(matches!(
+            out,
+            StepOutcome::Failed(RuntimeError::AssertFailed { .. })
+        ));
     }
 
     #[test]
@@ -325,7 +435,18 @@ mod tests {
         let input: Arc<dyn InputSink> = Arc::new(NopSink);
         let mut st = BodyState::default();
         let body: Vec<Step> = vec![];
-        let out = step_once(id(), &body, 0, &mut st, &preds, &blank_frame(), 0, &assets, &p, &input);
+        let out = step_once(
+            id(),
+            &body,
+            0,
+            &mut st,
+            &preds,
+            &blank_frame(),
+            0,
+            &assets,
+            &p,
+            &input,
+        );
         assert!(matches!(out, StepOutcome::BodyComplete));
     }
 }

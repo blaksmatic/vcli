@@ -30,7 +30,9 @@ impl SystemRuntimeClock {
     /// Fresh instance.
     #[must_use]
     pub fn new() -> Self {
-        Self { inner: SystemClock::new() }
+        Self {
+            inner: SystemClock::new(),
+        }
     }
 }
 
@@ -55,7 +57,9 @@ impl ManualClock {
     /// Create at `start_ms`.
     #[must_use]
     pub fn new(start_ms: UnixMs) -> Self {
-        Self { inner: Arc::new((Mutex::new(start_ms), Condvar::new())) }
+        Self {
+            inner: Arc::new((Mutex::new(start_ms), Condvar::new())),
+        }
     }
 
     /// Jump the clock to `ms`.
@@ -99,7 +103,10 @@ mod tests {
         let c = ManualClock::new(0);
         let t0 = std::time::Instant::now();
         c.sleep_ms(10_000);
-        assert!(t0.elapsed() < Duration::from_millis(100), "sleep must not block");
+        assert!(
+            t0.elapsed() < Duration::from_millis(100),
+            "sleep must not block"
+        );
         assert_eq!(c.unix_ms(), 10_000);
     }
 
