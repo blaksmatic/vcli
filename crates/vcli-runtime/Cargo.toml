@@ -43,3 +43,11 @@ path = "tests/scenarios/watch_timeout.rs"
 [[test]]
 name = "while_true_retry"
 path = "tests/scenarios/while_true_retry.rs"
+
+[[test]]
+name = "wait_for_timeout"
+path = "tests/scenarios/wait_for_timeout.rs"
+
+[[test]]
+name = "assert_failure"
+path = "tests/scenarios/assert_failure.rs"
