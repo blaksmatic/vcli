@@ -35,3 +35,7 @@ path = "tests/scenarios/persistent_watch.rs"
 [[test]]
 name = "until_predicate"
 path = "tests/scenarios/until_predicate.rs"
+
+[[test]]
+name = "watch_timeout"
+path = "tests/scenarios/watch_timeout.rs"
