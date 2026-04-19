@@ -51,3 +51,7 @@ path = "tests/scenarios/wait_for_timeout.rs"
 [[test]]
 name = "assert_failure"
 path = "tests/scenarios/assert_failure.rs"
+
+[[test]]
+name = "input_postcondition"
+path = "tests/scenarios/input_postcondition.rs"

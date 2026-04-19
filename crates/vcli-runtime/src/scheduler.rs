@@ -262,6 +262,7 @@ impl Scheduler {
         let mut candidates: Vec<
             crate::arbiter::Candidate<(ProgramId, u32, Vec<vcli_core::Step>, bool)>,
         > = Vec::new();
+        let mut direct_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
 
         for id in running_ids.iter().copied() {
             let rp = self.programs.get(&id).unwrap();
@@ -341,11 +342,15 @@ impl Scheduler {
             }
             let fire = fires.into_iter().next();
             if let Some((idx, ref steps, one_shot)) = fire {
-                candidates.push(crate::arbiter::Candidate {
-                    program_id: id,
-                    priority: rp.program.priority,
-                    payload: (id, idx, steps.clone(), one_shot),
-                });
+                if steps.is_empty() {
+                    direct_fires.push((id, idx, one_shot));
+                } else {
+                    candidates.push(crate::arbiter::Candidate {
+                        program_id: id,
+                        priority: rp.program.priority,
+                        payload: (id, idx, steps.clone(), one_shot),
+                    });
+                }
             }
             evals.push((id, (truthies, fire, retires)));
         }
@@ -357,6 +362,17 @@ impl Scheduler {
         let mut dispatched_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
         let mut dispatch_failed: std::collections::HashSet<ProgramId> =
             std::collections::HashSet::new();
+
+        // Empty-step watches have nothing to arbitrate — emit watch.fired
+        // directly and carry them through the post-fire bookkeeping.
+        for (prog_id, watch_idx, one_shot) in &direct_fires {
+            self.event.emit(EventData::WatchFired {
+                program_id: *prog_id,
+                watch_index: *watch_idx,
+                predicate: "watch".into(),
+            });
+            dispatched_fires.push((*prog_id, *watch_idx, *one_shot));
+        }
         for d in decisions {
             let (prog_id, watch_idx, steps, one_shot) = d.payload;
             if d.dispatch {
