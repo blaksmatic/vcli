@@ -1,0 +1,25 @@
+[package]
+name        = "vcli-runtime"
+version.workspace     = true
+edition.workspace     = true
+rust-version.workspace= true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+description = "Deterministic 10 fps scheduler that wires Capture → Perception → Arbiter → Input for vcli programs."
+
+[dependencies]
+vcli-core        = { path = "../vcli-core" }
+vcli-capture     = { path = "../vcli-capture" }
+vcli-input       = { path = "../vcli-input" }
+vcli-perception  = { path = "../vcli-perception" }
+
+crossbeam-channel = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+serde_json        = { workspace = true }
+
+[dev-dependencies]
+vcli-dsl          = { path = "../vcli-dsl" }
+proptest          = { workspace = true }
+tempfile          = { workspace = true }
