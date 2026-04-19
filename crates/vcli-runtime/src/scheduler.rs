@@ -275,6 +275,24 @@ impl Scheduler {
                 if state.retired {
                     continue;
                 }
+                // UntilPredicate: terminator truthy → retire without firing.
+                if let vcli_core::watch::Lifetime::UntilPredicate { name } = &w.lifetime {
+                    match self.perception.evaluate_named(
+                        name,
+                        &rp.program.predicates,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        Some(id),
+                    ) {
+                        Ok(r) if r.truthy => {
+                            retires.push(idx_u32);
+                            continue;
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("perception (until terminator): {e}"),
+                    }
+                }
                 let truthy = match &w.when {
                     vcli_core::watch::WatchWhen::ByName(n) => match self.perception.evaluate_named(
                         n,

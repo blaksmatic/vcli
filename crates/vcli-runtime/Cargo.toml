@@ -31,3 +31,7 @@ path = "tests/scenarios/one_shot_watch.rs"
 [[test]]
 name = "persistent_watch"
 path = "tests/scenarios/persistent_watch.rs"
+
+[[test]]
+name = "until_predicate"
+path = "tests/scenarios/until_predicate.rs"
