@@ -169,11 +169,233 @@ impl Scheduler {
         false
     }
 
-    /// Placeholder tick body. Real evaluation lands in Task 17.
+    #[allow(clippy::too_many_lines)]
     fn tick_once(&mut self) {
-        let _ = &self.capture;
-        let _ = &self.input;
-        let _ = &self.perception;
+        let frame = match self.capture.grab_screen() {
+            Ok(f) => std::sync::Arc::new(f),
+            Err(e) => {
+                tracing::warn!("capture failed: {e}");
+                self.event.emit(EventData::TickFrameSkipped {
+                    reason: "capture_failed".into(),
+                });
+                return;
+            }
+        };
+        self.perception.clear();
+        let now_ms = self.clock.unix_ms();
+        let assets: std::collections::BTreeMap<String, Vec<u8>> =
+            std::collections::BTreeMap::new();
+
+        let waiting: Vec<ProgramId> = self
+            .programs
+            .iter()
+            .filter(|(_, p)| p.state == ProgramState::Waiting)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in waiting {
+            let fire = {
+                let p = &self.programs[&id];
+                crate::triggers::trigger_fires(
+                    &p.program.trigger,
+                    &p.program.predicates,
+                    &frame,
+                    now_ms,
+                    &assets,
+                    &self.perception,
+                    id,
+                )
+            };
+            match fire {
+                Ok(true) => {
+                    let rp = self.programs.get_mut(&id).unwrap();
+                    rp.state = ProgramState::Running;
+                    rp.running_since_ms = Some(now_ms);
+                    rp.body_cursor = Some(0);
+                    for (i, _) in rp.program.watches.iter().enumerate() {
+                        rp.watch_state.insert(
+                            u32::try_from(i).unwrap_or(u32::MAX),
+                            crate::program::WatchRuntime::default(),
+                        );
+                    }
+                    self.event.emit(EventData::ProgramStateChanged {
+                        program_id: id,
+                        from: ProgramState::Waiting,
+                        to: ProgramState::Running,
+                        reason: "trigger_fired".into(),
+                    });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    self.programs.get_mut(&id).unwrap().state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: id,
+                        reason: e.code().as_str().into(),
+                        step: None,
+                        emit: None,
+                    });
+                }
+            }
+        }
+
+        let running_ids: Vec<ProgramId> = self
+            .programs
+            .iter()
+            .filter(|(_, p)| p.state == ProgramState::Running)
+            .map(|(id, _)| *id)
+            .collect();
+
+        let mut per_program_steps: Vec<
+            crate::arbiter::Candidate<(ProgramId, u32, Vec<vcli_core::Step>)>,
+        > = Vec::new();
+
+        for id in running_ids.iter().copied() {
+            let rp = self.programs.get(&id).unwrap();
+            let running_since = rp.running_since_ms.unwrap_or(now_ms);
+            let mut fires: Vec<(u32, Vec<vcli_core::Step>, bool)> = Vec::new();
+            for (idx, w) in rp.program.watches.iter().enumerate() {
+                let idx_u32 = u32::try_from(idx).unwrap_or(u32::MAX);
+                let state = rp.watch_state.get(&idx_u32).cloned().unwrap_or_default();
+                let truthy = match &w.when {
+                    vcli_core::watch::WatchWhen::ByName(n) => {
+                        match self.perception.evaluate_named(
+                            n,
+                            &rp.program.predicates,
+                            &frame,
+                            now_ms,
+                            &assets,
+                            Some(id),
+                        ) {
+                            Ok(r) => r.truthy,
+                            Err(e) => {
+                                tracing::warn!("perception: {e}");
+                                continue;
+                            }
+                        }
+                    }
+                    vcli_core::watch::WatchWhen::Inline(p) => {
+                        let mut tmp = rp.program.predicates.clone();
+                        let key = format!("__inline_{idx}");
+                        tmp.insert(key.clone(), *p.clone());
+                        match self.perception.evaluate_named(
+                            &key, &tmp, &frame, now_ms, &assets, Some(id),
+                        ) {
+                            Ok(r) => r.truthy,
+                            Err(e) => {
+                                tracing::warn!("perception: {e}");
+                                continue;
+                            }
+                        }
+                    }
+                };
+                match crate::watches::decide(w, &state, truthy, now_ms, running_since) {
+                    crate::watches::WatchDecision::Fire => fires.push((
+                        idx_u32,
+                        w.steps.clone(),
+                        matches!(w.lifetime, vcli_core::watch::Lifetime::OneShot),
+                    )),
+                    crate::watches::WatchDecision::Skip => {}
+                    crate::watches::WatchDecision::Retire => {}
+                }
+            }
+            if let Some((idx, steps, _)) = fires.first() {
+                per_program_steps.push(crate::arbiter::Candidate {
+                    program_id: id,
+                    priority: rp.program.priority,
+                    payload: (id, *idx, steps.clone()),
+                });
+            }
+        }
+        let decisions = crate::arbiter::resolve(per_program_steps);
+        for d in decisions {
+            let (prog_id, watch_idx, steps) = d.payload;
+            if d.dispatch {
+                for s in &steps {
+                    let value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+                    self.event.emit(EventData::ActionDispatched {
+                        program_id: prog_id,
+                        step: value,
+                        target: None,
+                    });
+                }
+                self.event.emit(EventData::WatchFired {
+                    program_id: prog_id,
+                    watch_index: watch_idx,
+                    predicate: "watch".into(),
+                });
+            } else if let Some(w) = d.loser_of {
+                let value = serde_json::Value::Array(
+                    steps
+                        .iter()
+                        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
+                        .collect(),
+                );
+                self.event.emit(EventData::ActionDeferred {
+                    program_id: prog_id,
+                    step: value,
+                    reason: serde_json::json!({ "conflict_with": w.to_string() }),
+                });
+            }
+        }
+
+        for id in running_ids.iter().copied() {
+            let rp = self.programs.get_mut(&id).unwrap();
+            let cursor = rp.body_cursor.unwrap_or(0);
+            let body = rp.program.body.clone();
+            let outcome = crate::body::step_once(
+                id,
+                &body,
+                cursor,
+                &mut rp.body_state,
+                &rp.program.predicates,
+                &frame,
+                now_ms,
+                &assets,
+                &self.perception,
+                &self.input,
+            );
+            match outcome {
+                crate::body::StepOutcome::Advanced => {
+                    rp.body_cursor = Some(cursor + 1);
+                    if rp.body_complete() && rp.active_watch_count() == 0 {
+                        let emit = rp.program.on_complete.as_ref().map(|c| c.emit.clone());
+                        rp.state = ProgramState::Completed;
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id: id,
+                            from: ProgramState::Running,
+                            to: ProgramState::Completed,
+                            reason: "body_complete".into(),
+                        });
+                        self.event
+                            .emit(EventData::ProgramCompleted { program_id: id, emit });
+                    }
+                }
+                crate::body::StepOutcome::Stalled => {}
+                crate::body::StepOutcome::BodyComplete => {
+                    if rp.active_watch_count() == 0 {
+                        let emit = rp.program.on_complete.as_ref().map(|c| c.emit.clone());
+                        rp.state = ProgramState::Completed;
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id: id,
+                            from: ProgramState::Running,
+                            to: ProgramState::Completed,
+                            reason: "body_complete".into(),
+                        });
+                        self.event
+                            .emit(EventData::ProgramCompleted { program_id: id, emit });
+                    }
+                }
+                crate::body::StepOutcome::Failed(err) => {
+                    let emit = rp.program.on_fail.as_ref().map(|f| f.emit.clone());
+                    rp.state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: id,
+                        reason: err.code().as_str().into(),
+                        step: Some(format!("body[{cursor}]")),
+                        emit,
+                    });
+                }
+            }
+        }
     }
 }
 
