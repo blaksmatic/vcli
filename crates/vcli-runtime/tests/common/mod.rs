@@ -4,8 +4,7 @@
 
 use std::collections::BTreeMap;
 
-pub use crossbeam_channel::{unbounded, Receiver, Sender};
-pub use vcli_core::state::ProgramState;
+pub use crossbeam_channel::{unbounded, Receiver};
 pub use vcli_core::{Event, ProgramId};
 pub use vcli_runtime::{Scheduler, SchedulerCommand, SchedulerConfig};
 

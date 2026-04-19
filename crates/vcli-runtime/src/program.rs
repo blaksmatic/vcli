@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 
 use vcli_core::state::ProgramState;
-use vcli_core::{Program, ProgramId, UnixMs};
+use vcli_core::{Program, UnixMs};
 
-/// Scheduler-owned per-program state.
+/// Scheduler-owned per-program state. The scheduler keys programs by
+/// `ProgramId` in a `HashMap`, so the id is not duplicated on the value.
 pub struct RunningProgram {
-    /// Assigned id.
-    pub id: ProgramId,
     /// Parsed program.
     pub program: Program,
     /// Current lifecycle state.
@@ -41,9 +40,8 @@ pub struct WatchRuntime {
 impl RunningProgram {
     /// Construct at `Pending` with default bookkeeping.
     #[must_use]
-    pub fn pending(id: ProgramId, program: Program) -> Self {
+    pub fn pending(program: Program) -> Self {
         Self {
-            id,
             program,
             state: ProgramState::Pending,
             running_since_ms: None,
@@ -95,8 +93,7 @@ mod tests {
 
     #[test]
     fn pending_is_initial_state() {
-        let id: ProgramId = "12345678-1234-4567-8910-111213141516".parse().unwrap();
-        let rp = RunningProgram::pending(id, sample_program());
+        let rp = RunningProgram::pending(sample_program());
         assert_eq!(rp.state, ProgramState::Pending);
         assert!(rp.body_complete(), "empty body is trivially complete");
         assert_eq!(rp.active_watch_count(), 0);
@@ -104,10 +101,9 @@ mod tests {
 
     #[test]
     fn body_complete_detects_exhausted_cursor() {
-        let id: ProgramId = "12345678-1234-4567-8910-111213141516".parse().unwrap();
         let mut p = sample_program();
         p.body = vec![vcli_core::Step::SleepMs { ms: 10 }];
-        let mut rp = RunningProgram::pending(id, p);
+        let mut rp = RunningProgram::pending(p);
         rp.body_cursor = Some(0);
         assert!(!rp.body_complete());
         rp.body_cursor = Some(1);

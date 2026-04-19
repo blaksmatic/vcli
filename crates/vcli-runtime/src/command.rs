@@ -35,7 +35,7 @@ pub enum SchedulerCommand {
         program_id: ProgramId,
         /// Step index to resume at (`0` = from start).
         from_step: u32,
-        /// Full program (daemon reloaded it from SQLite).
+        /// Full program (daemon reloaded it from `SQLite`).
         program: Program,
     },
     /// Drain and exit `run_until_shutdown`.

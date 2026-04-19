@@ -37,7 +37,7 @@ pub fn decide(
             return WatchDecision::Retire;
         }
     }
-    if !(truthy_now && !state.last_truthy) {
+    if state.last_truthy || !truthy_now {
         return WatchDecision::Skip;
     }
     if let Some(last) = state.last_fired_ms {
@@ -54,11 +54,6 @@ pub fn after_fire(watch: &Watch, state: &mut WatchRuntime, now_ms: UnixMs) {
     if matches!(watch.lifetime, Lifetime::OneShot) {
         state.retired = true;
     }
-}
-
-/// Retire a watch when its `UntilPredicate` predicate is truthy this tick.
-pub fn on_until_predicate_truthy(state: &mut WatchRuntime) {
-    state.retired = true;
 }
 
 #[cfg(test)]

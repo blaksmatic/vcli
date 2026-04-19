@@ -40,13 +40,7 @@ impl InputSink for RecordingInputSink {
         Ok(())
     }
 
-    fn click(
-        &self,
-        at: Point,
-        button: Button,
-        _: &[Modifier],
-        _: u32,
-    ) -> Result<(), InputError> {
+    fn click(&self, at: Point, button: Button, _: &[Modifier], _: u32) -> Result<(), InputError> {
         self.calls.lock().unwrap().push(Call::Click(at, button));
         Ok(())
     }
@@ -59,12 +53,7 @@ impl InputSink for RecordingInputSink {
         Ok(())
     }
 
-    fn drag(
-        &self,
-        from: Point,
-        segs: &[DragSegment],
-        button: Button,
-    ) -> Result<(), InputError> {
+    fn drag(&self, from: Point, segs: &[DragSegment], button: Button) -> Result<(), InputError> {
         self.calls
             .lock()
             .unwrap()

@@ -89,10 +89,7 @@ fn one_shot_watch_fires_once_and_completes() {
         types.iter().any(|t| t == "program.submitted"),
         "types: {types:?}"
     );
-    assert!(
-        types.iter().any(|t| t == "watch.fired"),
-        "types: {types:?}"
-    );
+    assert!(types.iter().any(|t| t == "watch.fired"), "types: {types:?}");
     assert!(
         types.iter().any(|t| t == "program.completed"),
         "types: {types:?}"

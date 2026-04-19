@@ -16,6 +16,13 @@ use crate::command::SchedulerCommand;
 use crate::event::EventEmitter;
 use crate::program::RunningProgram;
 
+/// Per-program evaluation slice passed through `tick_once`:
+/// `(program_id, truthies-by-watch-idx, retires-by-watch-idx)`.
+type PerProgEval = (ProgramId, Vec<(u32, bool)>, Vec<u32>);
+
+/// Arbiter payload for a firing watch: `(watch_idx, steps, is_one_shot)`.
+type WatchFirePayload = (u32, Vec<vcli_core::Step>, bool);
+
 /// Tunable knobs.
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulerConfig {
@@ -109,7 +116,7 @@ impl Scheduler {
                     program_id,
                     program,
                 } => {
-                    let mut rp = RunningProgram::pending(program_id, program);
+                    let mut rp = RunningProgram::pending(program);
                     rp.state = ProgramState::Waiting;
                     self.event.emit(EventData::ProgramSubmitted {
                         program_id,
@@ -153,7 +160,7 @@ impl Scheduler {
                     from_step,
                     program,
                 } => {
-                    let mut rp = RunningProgram::pending(program_id, program);
+                    let mut rp = RunningProgram::pending(program);
                     rp.state = ProgramState::Running;
                     rp.running_since_ms = Some(self.clock.unix_ms());
                     rp.body_cursor = Some(from_step);
@@ -249,19 +256,11 @@ impl Scheduler {
             .map(|(id, _)| *id)
             .collect();
 
-        // Per-program evaluation results: (truthies, fire, retires).
         // `truthies` covers every non-retired watch that produced a result.
-        // `fire` is the first firing decision (we arbitrate one action/program/tick).
-        // `retires` holds watches whose Lifetime::TimeoutMs window elapsed.
-        type PerProg = (
-            Vec<(u32, bool)>,
-            Option<(u32, Vec<vcli_core::Step>, bool)>,
-            Vec<u32>,
-        );
-        let mut evals: Vec<(ProgramId, PerProg)> = Vec::new();
-        let mut candidates: Vec<
-            crate::arbiter::Candidate<(ProgramId, u32, Vec<vcli_core::Step>, bool)>,
-        > = Vec::new();
+        // `retires` holds watches whose Lifetime::TimeoutMs window elapsed or
+        // whose UntilPredicate terminator tripped this tick.
+        let mut evals: Vec<PerProgEval> = Vec::new();
+        let mut candidates: Vec<crate::arbiter::Candidate<WatchFirePayload>> = Vec::new();
         let mut direct_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
 
         for id in running_ids.iter().copied() {
@@ -340,19 +339,18 @@ impl Scheduler {
                     crate::watches::WatchDecision::Retire => retires.push(idx_u32),
                 }
             }
-            let fire = fires.into_iter().next();
-            if let Some((idx, ref steps, one_shot)) = fire {
+            if let Some((idx, steps, one_shot)) = fires.into_iter().next() {
                 if steps.is_empty() {
                     direct_fires.push((id, idx, one_shot));
                 } else {
                     candidates.push(crate::arbiter::Candidate {
                         program_id: id,
                         priority: rp.program.priority,
-                        payload: (id, idx, steps.clone(), one_shot),
+                        payload: (idx, steps, one_shot),
                     });
                 }
             }
-            evals.push((id, (truthies, fire, retires)));
+            evals.push((id, truthies, retires));
         }
 
         let decisions = crate::arbiter::resolve(candidates);
@@ -374,7 +372,8 @@ impl Scheduler {
             dispatched_fires.push((*prog_id, *watch_idx, *one_shot));
         }
         for d in decisions {
-            let (prog_id, watch_idx, steps, one_shot) = d.payload;
+            let prog_id = d.program_id;
+            let (watch_idx, steps, one_shot) = d.payload;
             if d.dispatch {
                 let preds = self.programs[&prog_id].program.predicates.clone();
                 let mut err: Option<crate::error::RuntimeError> = None;
@@ -435,7 +434,7 @@ impl Scheduler {
 
         // Apply WatchRuntime updates: truthy edges, timeout retirements, and
         // post-fire bookkeeping (last_fired_ms + OneShot retirement).
-        for (id, (truthies, _, retires)) in &evals {
+        for (id, truthies, retires) in &evals {
             let rp = self.programs.get_mut(id).unwrap();
             for (idx, t) in truthies {
                 let wr = rp.watch_state.entry(*idx).or_default();

@@ -231,7 +231,14 @@ fn resolve_target(
         Target::Expression(s) => {
             let e = expr::parse(s)?;
             let r = perception
-                .evaluate_named(e.predicate, predicates, frame, now_ms, assets, Some(program_id))
+                .evaluate_named(
+                    e.predicate,
+                    predicates,
+                    frame,
+                    now_ms,
+                    assets,
+                    Some(program_id),
+                )
                 .map_err(|err| RuntimeError::Perception(err.to_string()))?;
             match e.accessor {
                 expr::Accessor::MatchCenter => expr::resolve_center(&r),
@@ -258,7 +265,9 @@ fn dispatch_at<F>(
 where
     F: FnOnce(Point) -> Result<(), RuntimeError>,
 {
-    let point = match resolve_target(target, predicates, frame, now_ms, assets, perception, program_id) {
+    let point = match resolve_target(
+        target, predicates, frame, now_ms, assets, perception, program_id,
+    ) {
         Ok(p) => p,
         Err(e) => return StepOutcome::Failed(e),
     };
@@ -289,19 +298,25 @@ pub fn dispatch_action(
 ) -> Result<(), RuntimeError> {
     match step {
         Step::Move { at } => {
-            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            let p = resolve_target(
+                at, predicates, frame, now_ms, assets, perception, program_id,
+            )?;
             input
                 .mouse_move(p)
                 .map_err(|e| RuntimeError::Input(e.to_string()))
         }
         Step::Click { at, button } => {
-            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            let p = resolve_target(
+                at, predicates, frame, now_ms, assets, perception, program_id,
+            )?;
             input
                 .click(p, *button, &[], 0)
                 .map_err(|e| RuntimeError::Input(e.to_string()))
         }
         Step::Scroll { at, .. } => {
-            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            let p = resolve_target(
+                at, predicates, frame, now_ms, assets, perception, program_id,
+            )?;
             input
                 .mouse_move(p)
                 .map_err(|e| RuntimeError::Input(e.to_string()))

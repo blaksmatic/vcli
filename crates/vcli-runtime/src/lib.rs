@@ -12,17 +12,13 @@
 
 mod arbiter;
 mod body;
-mod budget;
 pub mod clock;
 mod command;
-mod confirm;
 mod error;
 mod event;
 mod expr;
-mod merged_graph;
 mod program;
 mod scheduler;
-mod transitions;
 mod triggers;
 mod watches;
 

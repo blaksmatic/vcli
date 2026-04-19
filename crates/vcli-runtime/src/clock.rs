@@ -63,6 +63,10 @@ impl ManualClock {
     }
 
     /// Jump the clock to `ms`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn set_unix_ms(&self, ms: UnixMs) {
         let (lock, cv) = &*self.inner;
         *lock.lock().unwrap() = ms;
@@ -70,6 +74,10 @@ impl ManualClock {
     }
 
     /// Advance the clock by `delta_ms`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn advance_ms(&self, delta_ms: u32) {
         let (lock, cv) = &*self.inner;
         let mut g = lock.lock().unwrap();
