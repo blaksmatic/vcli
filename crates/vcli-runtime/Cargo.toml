@@ -27,3 +27,7 @@ tempfile          = { workspace = true }
 [[test]]
 name = "one_shot_watch"
 path = "tests/scenarios/one_shot_watch.rs"
+
+[[test]]
+name = "persistent_watch"
+path = "tests/scenarios/persistent_watch.rs"
