@@ -217,6 +217,34 @@ pub fn step_once(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn resolve_target(
+    target: &Target,
+    predicates: &BTreeMap<String, Predicate>,
+    frame: &Frame,
+    now_ms: UnixMs,
+    assets: &BTreeMap<String, Vec<u8>>,
+    perception: &Perception,
+    program_id: ProgramId,
+) -> Result<Point, RuntimeError> {
+    match target {
+        Target::Absolute(p) => Ok(*p),
+        Target::Expression(s) => {
+            let e = expr::parse(s)?;
+            let r = perception
+                .evaluate_named(e.predicate, predicates, frame, now_ms, assets, Some(program_id))
+                .map_err(|err| RuntimeError::Perception(err.to_string()))?;
+            match e.accessor {
+                expr::Accessor::MatchCenter => expr::resolve_center(&r),
+                expr::Accessor::MatchBbox => {
+                    let bx = expr::resolve_bbox(&r)?;
+                    Ok(Point { x: bx.x, y: bx.y })
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn dispatch_at<F>(
     target: &Target,
     predicates: &BTreeMap<String, Predicate>,
@@ -230,40 +258,63 @@ fn dispatch_at<F>(
 where
     F: FnOnce(Point) -> Result<(), RuntimeError>,
 {
-    let point = match target {
-        Target::Absolute(p) => *p,
-        Target::Expression(s) => match expr::parse(s) {
-            Ok(e) => {
-                let r = match perception.evaluate_named(
-                    e.predicate,
-                    predicates,
-                    frame,
-                    now_ms,
-                    assets,
-                    Some(program_id),
-                ) {
-                    Ok(r) => r,
-                    Err(e2) => {
-                        return StepOutcome::Failed(RuntimeError::Perception(e2.to_string()))
-                    }
-                };
-                match e.accessor {
-                    expr::Accessor::MatchCenter => match expr::resolve_center(&r) {
-                        Ok(p) => p,
-                        Err(e) => return StepOutcome::Failed(e),
-                    },
-                    expr::Accessor::MatchBbox => match expr::resolve_bbox(&r) {
-                        Ok(bx) => Point { x: bx.x, y: bx.y },
-                        Err(e) => return StepOutcome::Failed(e),
-                    },
-                }
-            }
-            Err(e) => return StepOutcome::Failed(e),
-        },
+    let point = match resolve_target(target, predicates, frame, now_ms, assets, perception, program_id) {
+        Ok(p) => p,
+        Err(e) => return StepOutcome::Failed(e),
     };
     match f(point) {
         Ok(()) => StepOutcome::Advanced,
         Err(e) => StepOutcome::Failed(e),
+    }
+}
+
+/// Dispatch a single action step (Move/Click/Type/Key/Scroll) — used for watch
+/// firings, which don't carry body-only control-flow steps.
+///
+/// # Errors
+///
+/// Returns `RuntimeError::Input` on OS dispatch failure, `RuntimeError::Perception`
+/// if an expression target can't evaluate, or `RuntimeError::Internal` if a
+/// body-only step slips through (validator normally rejects these in watches).
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_action(
+    step: &Step,
+    predicates: &BTreeMap<String, Predicate>,
+    frame: &Frame,
+    now_ms: UnixMs,
+    assets: &BTreeMap<String, Vec<u8>>,
+    perception: &Perception,
+    program_id: ProgramId,
+    input: &Arc<dyn InputSink>,
+) -> Result<(), RuntimeError> {
+    match step {
+        Step::Move { at } => {
+            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            input
+                .mouse_move(p)
+                .map_err(|e| RuntimeError::Input(e.to_string()))
+        }
+        Step::Click { at, button } => {
+            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            input
+                .click(p, *button, &[], 0)
+                .map_err(|e| RuntimeError::Input(e.to_string()))
+        }
+        Step::Scroll { at, .. } => {
+            let p = resolve_target(at, predicates, frame, now_ms, assets, perception, program_id)?;
+            input
+                .mouse_move(p)
+                .map_err(|e| RuntimeError::Input(e.to_string()))
+        }
+        Step::Type { text } => input
+            .type_text(text)
+            .map_err(|e| RuntimeError::Input(e.to_string())),
+        Step::Key { key, modifiers } => input
+            .key_combo(modifiers, key)
+            .map_err(|e| RuntimeError::Input(e.to_string())),
+        Step::SleepMs { .. } | Step::WaitFor { .. } | Step::Assert { .. } => Err(
+            RuntimeError::Internal("body-only step used in watch".into()),
+        ),
     }
 }
 

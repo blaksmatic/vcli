@@ -249,34 +249,47 @@ impl Scheduler {
             .map(|(id, _)| *id)
             .collect();
 
-        let mut per_program_steps: Vec<
-            crate::arbiter::Candidate<(ProgramId, u32, Vec<vcli_core::Step>)>,
+        // Per-program evaluation results: (truthies, fire, retires).
+        // `truthies` covers every non-retired watch that produced a result.
+        // `fire` is the first firing decision (we arbitrate one action/program/tick).
+        // `retires` holds watches whose Lifetime::TimeoutMs window elapsed.
+        type PerProg = (
+            Vec<(u32, bool)>,
+            Option<(u32, Vec<vcli_core::Step>, bool)>,
+            Vec<u32>,
+        );
+        let mut evals: Vec<(ProgramId, PerProg)> = Vec::new();
+        let mut candidates: Vec<
+            crate::arbiter::Candidate<(ProgramId, u32, Vec<vcli_core::Step>, bool)>,
         > = Vec::new();
 
         for id in running_ids.iter().copied() {
             let rp = self.programs.get(&id).unwrap();
             let running_since = rp.running_since_ms.unwrap_or(now_ms);
+            let mut truthies: Vec<(u32, bool)> = Vec::new();
             let mut fires: Vec<(u32, Vec<vcli_core::Step>, bool)> = Vec::new();
+            let mut retires: Vec<u32> = Vec::new();
             for (idx, w) in rp.program.watches.iter().enumerate() {
                 let idx_u32 = u32::try_from(idx).unwrap_or(u32::MAX);
                 let state = rp.watch_state.get(&idx_u32).cloned().unwrap_or_default();
+                if state.retired {
+                    continue;
+                }
                 let truthy = match &w.when {
-                    vcli_core::watch::WatchWhen::ByName(n) => {
-                        match self.perception.evaluate_named(
-                            n,
-                            &rp.program.predicates,
-                            &frame,
-                            now_ms,
-                            &assets,
-                            Some(id),
-                        ) {
-                            Ok(r) => r.truthy,
-                            Err(e) => {
-                                tracing::warn!("perception: {e}");
-                                continue;
-                            }
+                    vcli_core::watch::WatchWhen::ByName(n) => match self.perception.evaluate_named(
+                        n,
+                        &rp.program.predicates,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        Some(id),
+                    ) {
+                        Ok(r) => r.truthy,
+                        Err(e) => {
+                            tracing::warn!("perception: {e}");
+                            continue;
                         }
-                    }
+                    },
                     vcli_core::watch::WatchWhen::Inline(p) => {
                         let mut tmp = rp.program.predicates.clone();
                         let key = format!("__inline_{idx}");
@@ -297,6 +310,7 @@ impl Scheduler {
                         }
                     }
                 };
+                truthies.push((idx_u32, truthy));
                 match crate::watches::decide(w, &state, truthy, now_ms, running_since) {
                     crate::watches::WatchDecision::Fire => fires.push((
                         idx_u32,
@@ -304,21 +318,32 @@ impl Scheduler {
                         matches!(w.lifetime, vcli_core::watch::Lifetime::OneShot),
                     )),
                     crate::watches::WatchDecision::Skip => {}
-                    crate::watches::WatchDecision::Retire => {}
+                    crate::watches::WatchDecision::Retire => retires.push(idx_u32),
                 }
             }
-            if let Some((idx, steps, _)) = fires.first() {
-                per_program_steps.push(crate::arbiter::Candidate {
+            let fire = fires.into_iter().next();
+            if let Some((idx, ref steps, one_shot)) = fire {
+                candidates.push(crate::arbiter::Candidate {
                     program_id: id,
                     priority: rp.program.priority,
-                    payload: (id, *idx, steps.clone()),
+                    payload: (id, idx, steps.clone(), one_shot),
                 });
             }
+            evals.push((id, (truthies, fire, retires)));
         }
-        let decisions = crate::arbiter::resolve(per_program_steps);
+
+        let decisions = crate::arbiter::resolve(candidates);
+        // Track which (program, watch_idx) actually dispatched so we can apply
+        // `after_fire` updates below. Also track programs whose dispatch errored
+        // so we skip their body step this tick.
+        let mut dispatched_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
+        let mut dispatch_failed: std::collections::HashSet<ProgramId> =
+            std::collections::HashSet::new();
         for d in decisions {
-            let (prog_id, watch_idx, steps) = d.payload;
+            let (prog_id, watch_idx, steps, one_shot) = d.payload;
             if d.dispatch {
+                let preds = self.programs[&prog_id].program.predicates.clone();
+                let mut err: Option<crate::error::RuntimeError> = None;
                 for s in &steps {
                     let value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
                     self.event.emit(EventData::ActionDispatched {
@@ -326,12 +351,39 @@ impl Scheduler {
                         step: value,
                         target: None,
                     });
+                    if let Err(e) = crate::body::dispatch_action(
+                        s,
+                        &preds,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        &self.perception,
+                        prog_id,
+                        &self.input,
+                    ) {
+                        err = Some(e);
+                        break;
+                    }
+                }
+                if let Some(e) = err {
+                    dispatch_failed.insert(prog_id);
+                    let rp = self.programs.get_mut(&prog_id).unwrap();
+                    let emit = rp.program.on_fail.as_ref().map(|f| f.emit.clone());
+                    rp.state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: prog_id,
+                        reason: e.code().as_str().into(),
+                        step: Some(format!("watch[{watch_idx}]")),
+                        emit,
+                    });
+                    continue;
                 }
                 self.event.emit(EventData::WatchFired {
                     program_id: prog_id,
                     watch_index: watch_idx,
                     predicate: "watch".into(),
                 });
+                dispatched_fires.push((prog_id, watch_idx, one_shot));
             } else if let Some(w) = d.loser_of {
                 let value = serde_json::Value::Array(
                     steps
@@ -347,8 +399,34 @@ impl Scheduler {
             }
         }
 
+        // Apply WatchRuntime updates: truthy edges, timeout retirements, and
+        // post-fire bookkeeping (last_fired_ms + OneShot retirement).
+        for (id, (truthies, _, retires)) in &evals {
+            let rp = self.programs.get_mut(id).unwrap();
+            for (idx, t) in truthies {
+                let wr = rp.watch_state.entry(*idx).or_default();
+                wr.last_truthy = *t;
+            }
+            for idx in retires {
+                let wr = rp.watch_state.entry(*idx).or_default();
+                wr.retired = true;
+            }
+        }
+        for (id, idx, _one_shot) in &dispatched_fires {
+            let rp = self.programs.get_mut(id).unwrap();
+            let watch = &rp.program.watches[*idx as usize];
+            let wr = rp.watch_state.entry(*idx).or_default();
+            crate::watches::after_fire(watch, wr, now_ms);
+        }
+
         for id in running_ids.iter().copied() {
+            if dispatch_failed.contains(&id) {
+                continue;
+            }
             let rp = self.programs.get_mut(&id).unwrap();
+            if rp.state != ProgramState::Running {
+                continue;
+            }
             let cursor = rp.body_cursor.unwrap_or(0);
             let body = rp.program.body.clone();
             let outcome = crate::body::step_once(

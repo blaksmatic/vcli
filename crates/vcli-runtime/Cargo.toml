@@ -23,3 +23,7 @@ serde_json        = { workspace = true }
 vcli-dsl          = { path = "../vcli-dsl" }
 proptest          = { workspace = true }
 tempfile          = { workspace = true }
+
+[[test]]
+name = "one_shot_watch"
+path = "tests/scenarios/one_shot_watch.rs"
