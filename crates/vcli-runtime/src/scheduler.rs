@@ -1,0 +1,645 @@
+//! Scheduler entrypoint. Owns a `HashMap<ProgramId, RunningProgram>` and
+//! advances one tick per `tick_interval_ms`.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crossbeam_channel::{Receiver, Sender};
+use vcli_capture::Capture;
+use vcli_core::state::ProgramState;
+use vcli_core::{Event, EventData, ProgramId};
+use vcli_input::InputSink;
+use vcli_perception::Perception;
+
+use crate::clock::RuntimeClock;
+use crate::command::SchedulerCommand;
+use crate::event::EventEmitter;
+use crate::program::RunningProgram;
+
+/// Per-program evaluation slice passed through `tick_once`:
+/// `(program_id, truthies-by-watch-idx, retires-by-watch-idx)`.
+type PerProgEval = (ProgramId, Vec<(u32, bool)>, Vec<u32>);
+
+/// Arbiter payload for a firing watch: `(watch_idx, steps, is_one_shot)`.
+type WatchFirePayload = (u32, Vec<vcli_core::Step>, bool);
+
+/// Tunable knobs.
+#[derive(Debug, Clone, Copy)]
+pub struct SchedulerConfig {
+    /// Tick cadence.
+    pub tick_interval_ms: u32,
+    /// Soft budget per tick.
+    pub tick_budget_ms: u32,
+    /// Concurrent-program cap.
+    pub max_inflight: usize,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            tick_interval_ms: 100,
+            tick_budget_ms: 90,
+            max_inflight: 256,
+        }
+    }
+}
+
+/// The scheduler.
+///
+/// Single clock storage: `Arc<dyn RuntimeClock>` covers both wall-clock reads
+/// (via `unix_ms`) and tick pacing (via `sleep_ms`). `RuntimeClock` does not
+/// extend `vcli_core::Clock` — that would require trait-object upcasting,
+/// which is only stable from Rust 1.86 and our MSRV is 1.75.
+pub struct Scheduler {
+    config: SchedulerConfig,
+    capture: Box<dyn Capture>,
+    input: Arc<dyn InputSink>,
+    perception: Perception,
+    clock: Arc<dyn RuntimeClock>,
+    cmd_rx: Receiver<SchedulerCommand>,
+    event: EventEmitter,
+    programs: HashMap<ProgramId, RunningProgram>,
+}
+
+impl Scheduler {
+    /// Construct. The daemon will call `run_until_shutdown()` from a dedicated
+    /// OS thread immediately after construction.
+    #[must_use]
+    pub fn new(
+        config: SchedulerConfig,
+        capture: Box<dyn Capture>,
+        input: Arc<dyn InputSink>,
+        perception: Perception,
+        clock: Arc<dyn RuntimeClock>,
+        cmd_rx: Receiver<SchedulerCommand>,
+        event_tx: Sender<Event>,
+    ) -> Self {
+        let event = EventEmitter::new(event_tx, Arc::clone(&clock));
+        Self {
+            config,
+            capture,
+            input,
+            perception,
+            clock,
+            cmd_rx,
+            event,
+            programs: HashMap::new(),
+        }
+    }
+
+    /// Drive a single tick. Public so scenario tests can step deterministically
+    /// without a live wall-clock loop.
+    pub fn tick_once_pub(&mut self) {
+        self.drain_commands();
+        self.tick_once();
+    }
+
+    /// Main loop. Ticks on each `tick_interval_ms` deadline; returns when a
+    /// `Shutdown` command is observed. Does NOT emit `daemon.stopped` — that
+    /// is the daemon's responsibility.
+    pub fn run_until_shutdown(mut self) {
+        loop {
+            if self.drain_commands() {
+                break;
+            }
+            self.tick_once();
+            self.clock.sleep_ms(self.config.tick_interval_ms);
+        }
+    }
+
+    /// Drain pending commands. Returns `true` if a `Shutdown` was observed.
+    fn drain_commands(&mut self) -> bool {
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            match cmd {
+                SchedulerCommand::Shutdown => return true,
+                SchedulerCommand::SubmitValidated {
+                    program_id,
+                    program,
+                } => {
+                    let mut rp = RunningProgram::pending(program);
+                    rp.state = ProgramState::Waiting;
+                    self.event.emit(EventData::ProgramSubmitted {
+                        program_id,
+                        name: rp.program.name.clone(),
+                    });
+                    self.event.emit(EventData::ProgramStateChanged {
+                        program_id,
+                        from: ProgramState::Pending,
+                        to: ProgramState::Waiting,
+                        reason: "submitted".into(),
+                    });
+                    self.programs.insert(program_id, rp);
+                }
+                SchedulerCommand::Cancel { program_id, reason } => {
+                    if let Some(rp) = self.programs.get_mut(&program_id) {
+                        let from = rp.state;
+                        rp.state = ProgramState::Cancelled;
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id,
+                            from,
+                            to: ProgramState::Cancelled,
+                            reason,
+                        });
+                    }
+                }
+                SchedulerCommand::Start { program_id } => {
+                    if let Some(rp) = self.programs.get_mut(&program_id) {
+                        let from = rp.state;
+                        rp.state = ProgramState::Running;
+                        rp.running_since_ms = Some(self.clock.unix_ms());
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id,
+                            from,
+                            to: ProgramState::Running,
+                            reason: "start".into(),
+                        });
+                    }
+                }
+                SchedulerCommand::ResumeRunning {
+                    program_id,
+                    from_step,
+                    program,
+                } => {
+                    let mut rp = RunningProgram::pending(program);
+                    rp.state = ProgramState::Running;
+                    rp.running_since_ms = Some(self.clock.unix_ms());
+                    rp.body_cursor = Some(from_step);
+                    rp.resumed_from = Some(from_step);
+                    self.event.emit(EventData::ProgramStateChanged {
+                        program_id,
+                        from: ProgramState::Failed,
+                        to: ProgramState::Running,
+                        reason: "resume".into(),
+                    });
+                    self.event.emit(EventData::ProgramResumed {
+                        program_id,
+                        from_step,
+                    });
+                    self.programs.insert(program_id, rp);
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn tick_once(&mut self) {
+        let frame = match self.capture.grab_screen() {
+            Ok(f) => std::sync::Arc::new(f),
+            Err(e) => {
+                tracing::warn!("capture failed: {e}");
+                self.event.emit(EventData::TickFrameSkipped {
+                    reason: "capture_failed".into(),
+                });
+                return;
+            }
+        };
+        self.perception.clear();
+        let now_ms = self.clock.unix_ms();
+        let assets: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
+
+        let waiting: Vec<ProgramId> = self
+            .programs
+            .iter()
+            .filter(|(_, p)| p.state == ProgramState::Waiting)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in waiting {
+            let fire = {
+                let p = &self.programs[&id];
+                crate::triggers::trigger_fires(
+                    &p.program.trigger,
+                    &p.program.predicates,
+                    &frame,
+                    now_ms,
+                    &assets,
+                    &self.perception,
+                    id,
+                )
+            };
+            match fire {
+                Ok(true) => {
+                    let rp = self.programs.get_mut(&id).unwrap();
+                    rp.state = ProgramState::Running;
+                    rp.running_since_ms = Some(now_ms);
+                    rp.body_cursor = Some(0);
+                    for (i, _) in rp.program.watches.iter().enumerate() {
+                        rp.watch_state.insert(
+                            u32::try_from(i).unwrap_or(u32::MAX),
+                            crate::program::WatchRuntime::default(),
+                        );
+                    }
+                    self.event.emit(EventData::ProgramStateChanged {
+                        program_id: id,
+                        from: ProgramState::Waiting,
+                        to: ProgramState::Running,
+                        reason: "trigger_fired".into(),
+                    });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    self.programs.get_mut(&id).unwrap().state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: id,
+                        reason: e.code().as_str().into(),
+                        step: None,
+                        emit: None,
+                    });
+                }
+            }
+        }
+
+        let running_ids: Vec<ProgramId> = self
+            .programs
+            .iter()
+            .filter(|(_, p)| p.state == ProgramState::Running)
+            .map(|(id, _)| *id)
+            .collect();
+
+        // `truthies` covers every non-retired watch that produced a result.
+        // `retires` holds watches whose Lifetime::TimeoutMs window elapsed or
+        // whose UntilPredicate terminator tripped this tick.
+        let mut evals: Vec<PerProgEval> = Vec::new();
+        let mut candidates: Vec<crate::arbiter::Candidate<WatchFirePayload>> = Vec::new();
+        let mut direct_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
+
+        for id in running_ids.iter().copied() {
+            let rp = self.programs.get(&id).unwrap();
+            let running_since = rp.running_since_ms.unwrap_or(now_ms);
+            let mut truthies: Vec<(u32, bool)> = Vec::new();
+            let mut fires: Vec<(u32, Vec<vcli_core::Step>, bool)> = Vec::new();
+            let mut retires: Vec<u32> = Vec::new();
+            for (idx, w) in rp.program.watches.iter().enumerate() {
+                let idx_u32 = u32::try_from(idx).unwrap_or(u32::MAX);
+                let state = rp.watch_state.get(&idx_u32).cloned().unwrap_or_default();
+                if state.retired {
+                    continue;
+                }
+                // UntilPredicate: terminator truthy → retire without firing.
+                if let vcli_core::watch::Lifetime::UntilPredicate { name } = &w.lifetime {
+                    match self.perception.evaluate_named(
+                        name,
+                        &rp.program.predicates,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        Some(id),
+                    ) {
+                        Ok(r) if r.truthy => {
+                            retires.push(idx_u32);
+                            continue;
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("perception (until terminator): {e}"),
+                    }
+                }
+                let truthy = match &w.when {
+                    vcli_core::watch::WatchWhen::ByName(n) => match self.perception.evaluate_named(
+                        n,
+                        &rp.program.predicates,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        Some(id),
+                    ) {
+                        Ok(r) => r.truthy,
+                        Err(e) => {
+                            tracing::warn!("perception: {e}");
+                            continue;
+                        }
+                    },
+                    vcli_core::watch::WatchWhen::Inline(p) => {
+                        let mut tmp = rp.program.predicates.clone();
+                        let key = format!("__inline_{idx}");
+                        tmp.insert(key.clone(), *p.clone());
+                        match self.perception.evaluate_named(
+                            &key,
+                            &tmp,
+                            &frame,
+                            now_ms,
+                            &assets,
+                            Some(id),
+                        ) {
+                            Ok(r) => r.truthy,
+                            Err(e) => {
+                                tracing::warn!("perception: {e}");
+                                continue;
+                            }
+                        }
+                    }
+                };
+                truthies.push((idx_u32, truthy));
+                match crate::watches::decide(w, &state, truthy, now_ms, running_since) {
+                    crate::watches::WatchDecision::Fire => fires.push((
+                        idx_u32,
+                        w.steps.clone(),
+                        matches!(w.lifetime, vcli_core::watch::Lifetime::OneShot),
+                    )),
+                    crate::watches::WatchDecision::Skip => {}
+                    crate::watches::WatchDecision::Retire => retires.push(idx_u32),
+                }
+            }
+            if let Some((idx, steps, one_shot)) = fires.into_iter().next() {
+                if steps.is_empty() {
+                    direct_fires.push((id, idx, one_shot));
+                } else {
+                    candidates.push(crate::arbiter::Candidate {
+                        program_id: id,
+                        priority: rp.program.priority,
+                        payload: (idx, steps, one_shot),
+                    });
+                }
+            }
+            evals.push((id, truthies, retires));
+        }
+
+        let decisions = crate::arbiter::resolve(candidates);
+        // Track which (program, watch_idx) actually dispatched so we can apply
+        // `after_fire` updates below. Also track programs whose dispatch errored
+        // so we skip their body step this tick.
+        let mut dispatched_fires: Vec<(ProgramId, u32, bool)> = Vec::new();
+        let mut dispatch_failed: std::collections::HashSet<ProgramId> =
+            std::collections::HashSet::new();
+
+        // Empty-step watches have nothing to arbitrate — emit watch.fired
+        // directly and carry them through the post-fire bookkeeping.
+        for (prog_id, watch_idx, one_shot) in &direct_fires {
+            self.event.emit(EventData::WatchFired {
+                program_id: *prog_id,
+                watch_index: *watch_idx,
+                predicate: "watch".into(),
+            });
+            dispatched_fires.push((*prog_id, *watch_idx, *one_shot));
+        }
+        for d in decisions {
+            let prog_id = d.program_id;
+            let (watch_idx, steps, one_shot) = d.payload;
+            if d.dispatch {
+                let preds = self.programs[&prog_id].program.predicates.clone();
+                let mut err: Option<crate::error::RuntimeError> = None;
+                for s in &steps {
+                    let value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+                    self.event.emit(EventData::ActionDispatched {
+                        program_id: prog_id,
+                        step: value,
+                        target: None,
+                    });
+                    if let Err(e) = crate::body::dispatch_action(
+                        s,
+                        &preds,
+                        &frame,
+                        now_ms,
+                        &assets,
+                        &self.perception,
+                        prog_id,
+                        &self.input,
+                    ) {
+                        err = Some(e);
+                        break;
+                    }
+                }
+                if let Some(e) = err {
+                    dispatch_failed.insert(prog_id);
+                    let rp = self.programs.get_mut(&prog_id).unwrap();
+                    let emit = rp.program.on_fail.as_ref().map(|f| f.emit.clone());
+                    rp.state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: prog_id,
+                        reason: e.code().as_str().into(),
+                        step: Some(format!("watch[{watch_idx}]")),
+                        emit,
+                    });
+                    continue;
+                }
+                self.event.emit(EventData::WatchFired {
+                    program_id: prog_id,
+                    watch_index: watch_idx,
+                    predicate: "watch".into(),
+                });
+                dispatched_fires.push((prog_id, watch_idx, one_shot));
+            } else if let Some(w) = d.loser_of {
+                let value = serde_json::Value::Array(
+                    steps
+                        .iter()
+                        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
+                        .collect(),
+                );
+                self.event.emit(EventData::ActionDeferred {
+                    program_id: prog_id,
+                    step: value,
+                    reason: serde_json::json!({ "conflict_with": w.to_string() }),
+                });
+            }
+        }
+
+        // Apply WatchRuntime updates: truthy edges, timeout retirements, and
+        // post-fire bookkeeping (last_fired_ms + OneShot retirement).
+        for (id, truthies, retires) in &evals {
+            let rp = self.programs.get_mut(id).unwrap();
+            for (idx, t) in truthies {
+                let wr = rp.watch_state.entry(*idx).or_default();
+                wr.last_truthy = *t;
+            }
+            for idx in retires {
+                let wr = rp.watch_state.entry(*idx).or_default();
+                wr.retired = true;
+            }
+        }
+        for (id, idx, _one_shot) in &dispatched_fires {
+            let rp = self.programs.get_mut(id).unwrap();
+            let watch = &rp.program.watches[*idx as usize];
+            let wr = rp.watch_state.entry(*idx).or_default();
+            crate::watches::after_fire(watch, wr, now_ms);
+        }
+
+        for id in running_ids.iter().copied() {
+            if dispatch_failed.contains(&id) {
+                continue;
+            }
+            let rp = self.programs.get_mut(&id).unwrap();
+            if rp.state != ProgramState::Running {
+                continue;
+            }
+            let cursor = rp.body_cursor.unwrap_or(0);
+            let body = rp.program.body.clone();
+            let outcome = crate::body::step_once(
+                id,
+                &body,
+                cursor,
+                &mut rp.body_state,
+                &rp.program.predicates,
+                &frame,
+                now_ms,
+                &assets,
+                &self.perception,
+                &self.input,
+            );
+            match outcome {
+                crate::body::StepOutcome::Advanced => {
+                    rp.body_cursor = Some(cursor + 1);
+                    if rp.body_complete() && rp.active_watch_count() == 0 {
+                        let emit = rp.program.on_complete.as_ref().map(|c| c.emit.clone());
+                        rp.state = ProgramState::Completed;
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id: id,
+                            from: ProgramState::Running,
+                            to: ProgramState::Completed,
+                            reason: "body_complete".into(),
+                        });
+                        self.event.emit(EventData::ProgramCompleted {
+                            program_id: id,
+                            emit,
+                        });
+                    }
+                }
+                crate::body::StepOutcome::Stalled => {}
+                crate::body::StepOutcome::BodyComplete => {
+                    if rp.active_watch_count() == 0 {
+                        let emit = rp.program.on_complete.as_ref().map(|c| c.emit.clone());
+                        rp.state = ProgramState::Completed;
+                        self.event.emit(EventData::ProgramStateChanged {
+                            program_id: id,
+                            from: ProgramState::Running,
+                            to: ProgramState::Completed,
+                            reason: "body_complete".into(),
+                        });
+                        self.event.emit(EventData::ProgramCompleted {
+                            program_id: id,
+                            emit,
+                        });
+                    }
+                }
+                crate::body::StepOutcome::Failed(err) => {
+                    let emit = rp.program.on_fail.as_ref().map(|f| f.emit.clone());
+                    rp.state = ProgramState::Failed;
+                    self.event.emit(EventData::ProgramFailed {
+                        program_id: id,
+                        reason: err.code().as_str().into(),
+                        step: Some(format!("body[{cursor}]")),
+                        emit,
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::ManualClock;
+    use crossbeam_channel::unbounded;
+    use std::collections::BTreeMap;
+    use vcli_capture::capture::{Capture, WindowDescriptor};
+    use vcli_capture::error::CaptureError;
+    use vcli_core::action::{Button, Modifier};
+    use vcli_core::frame::{Frame, FrameFormat};
+    use vcli_core::geom::{Point, Rect};
+    use vcli_core::{program::DslVersion, trigger::Trigger, Program};
+    use vcli_input::error::InputError;
+    use vcli_input::sink::DragSegment;
+
+    struct StaticCapture;
+    impl Capture for StaticCapture {
+        fn supported_formats(&self) -> &[FrameFormat] {
+            &[FrameFormat::Rgba8]
+        }
+        fn enumerate_windows(&self) -> Result<Vec<WindowDescriptor>, CaptureError> {
+            Ok(vec![])
+        }
+        fn grab_screen(&mut self) -> Result<Frame, CaptureError> {
+            Ok(Frame::new(
+                FrameFormat::Rgba8,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                },
+                4,
+                std::sync::Arc::from(vec![0u8, 0, 0, 0]),
+                0,
+            ))
+        }
+        fn grab_window(&mut self, _: &WindowDescriptor) -> Result<Frame, CaptureError> {
+            self.grab_screen()
+        }
+    }
+
+    struct NopInput;
+    impl InputSink for NopInput {
+        fn mouse_move(&self, _: Point) -> Result<(), InputError> {
+            Ok(())
+        }
+        fn click(&self, _: Point, _: Button, _: &[Modifier], _: u32) -> Result<(), InputError> {
+            Ok(())
+        }
+        fn double_click(&self, _: Point, _: Button) -> Result<(), InputError> {
+            Ok(())
+        }
+        fn drag(&self, _: Point, _: &[DragSegment], _: Button) -> Result<(), InputError> {
+            Ok(())
+        }
+        fn type_text(&self, _: &str) -> Result<(), InputError> {
+            Ok(())
+        }
+        fn key_combo(&self, _: &[Modifier], _: &str) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    fn empty_program() -> Program {
+        Program {
+            version: DslVersion(DslVersion::V0_1.to_string()),
+            name: "x".into(),
+            id: None,
+            trigger: Trigger::OnSubmit,
+            predicates: BTreeMap::new(),
+            watches: vec![],
+            body: vec![],
+            on_complete: None,
+            on_fail: None,
+            timeout_ms: None,
+            labels: BTreeMap::new(),
+            priority: vcli_core::Priority::default(),
+        }
+    }
+
+    #[test]
+    fn shutdown_exits_cleanly() {
+        let (cmd_tx, cmd_rx) = unbounded::<SchedulerCommand>();
+        let (ev_tx, ev_rx) = unbounded::<Event>();
+        let clock = std::sync::Arc::new(ManualClock::new(0));
+        let perc = Perception::new();
+        let sched = Scheduler::new(
+            SchedulerConfig::default(),
+            Box::new(StaticCapture),
+            std::sync::Arc::new(NopInput),
+            perc,
+            clock,
+            cmd_rx,
+            ev_tx,
+        );
+        let id: ProgramId = "12345678-1234-4567-8910-111213141516".parse().unwrap();
+        cmd_tx
+            .send(SchedulerCommand::SubmitValidated {
+                program_id: id,
+                program: empty_program(),
+            })
+            .unwrap();
+        cmd_tx.send(SchedulerCommand::Shutdown).unwrap();
+        let handle = std::thread::spawn(move || sched.run_until_shutdown());
+        handle.join().unwrap();
+        let mut kinds: Vec<String> = Vec::new();
+        while let Ok(ev) = ev_rx.try_recv() {
+            kinds.push(
+                serde_json::to_value(&ev).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert!(kinds.iter().any(|k| k == "program.submitted"));
+        assert!(kinds.iter().any(|k| k == "program.state_changed"));
+    }
+}
