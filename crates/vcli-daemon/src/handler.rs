@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::sync::oneshot;
-use tracing::error;
-use vcli_core::{ErrorCode, ErrorPayload, ProgramId};
+use tokio::sync::{broadcast, oneshot};
+use tracing::{debug, error};
+use vcli_core::{ErrorCode, ErrorPayload, Event, ProgramId};
 use vcli_ipc::{
     Handler, IpcResult, RequestId, RequestOp, Response, StreamFrame, StreamKind, StreamSender,
 };
@@ -114,6 +114,70 @@ impl DaemonHandler {
             id,
             serde_json::json!({ "program_id": pid.to_string(), "name": name }),
         )
+    }
+
+    async fn stream_events(
+        &self,
+        id: RequestId,
+        filter_program: Option<ProgramId>,
+        follow: bool,
+        tx: StreamSender,
+    ) -> IpcResult<()> {
+        let mut rx = self.bridge.event_tx.subscribe();
+        if !follow {
+            let store = self.store.clone();
+            let history = tokio::task::spawn_blocking(move || {
+                let s = store.lock().unwrap();
+                s.stream_events(0, 10_000)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+            for row in history {
+                if filter_program.is_some_and(|p| p != row.program_id) {
+                    continue;
+                }
+                if let Ok(ev) = serde_json::from_str::<Event>(&row.data_json) {
+                    let frame = StreamFrame::event(id, ev);
+                    if tx.send(frame).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            return Ok(());
+        }
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    if let Some(p) = filter_program {
+                        if crate::persist::program_id_of(&ev.data) != Some(p) {
+                            continue;
+                        }
+                    }
+                    if tx.send(StreamFrame::event(id, ev)).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    let now = vcli_core::clock::now_unix_ms();
+                    let dropped = StreamFrame::event(
+                        id,
+                        Event {
+                            at: now,
+                            data: vcli_core::EventData::StreamDropped {
+                                count: u32::try_from(n).unwrap_or(u32::MAX),
+                                since: now,
+                            },
+                        },
+                    );
+                    if tx.send(dropped).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            }
+        }
     }
 
     async fn handle_resume(
@@ -304,13 +368,28 @@ impl Handler for DaemonHandler {
     async fn handle_stream(
         &self,
         id: RequestId,
-        _op: RequestOp,
+        op: RequestOp,
         tx: StreamSender,
     ) -> IpcResult<()> {
-        let _ = tx
-            .send(StreamFrame::end_of_stream(id, StreamKind::Events))
-            .await;
-        Ok(())
+        match op {
+            RequestOp::Events { follow } => self.stream_events(id, None, follow, tx).await,
+            RequestOp::Logs {
+                program_id,
+                follow,
+            } => self.stream_events(id, Some(program_id), follow, tx).await,
+            RequestOp::Trace { program_id: _ } => {
+                // v0 minimum: empty trace; server writes end_of_stream on return.
+                let _ = tx;
+                Ok(())
+            }
+            other => {
+                debug!("stream op {other:?} not supported");
+                let _ = tx
+                    .send(StreamFrame::end_of_stream(id, StreamKind::Events))
+                    .await;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -367,6 +446,56 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn events_stream_drains_history_then_closes_when_not_following() {
+        use tokio::sync::mpsc;
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        {
+            let mut s = f.handler.store.lock().unwrap();
+            s.insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "x",
+                source_json: "{}",
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+            let ev = Event {
+                at: 7,
+                data: vcli_core::EventData::ProgramCompleted {
+                    program_id: pid,
+                    emit: None,
+                },
+            };
+            s.append_event(pid, &ev).unwrap();
+        }
+
+        let (tx, mut rx) = mpsc::channel::<StreamFrame>(8);
+        let sender = StreamSender(tx);
+        let handler = f.handler.clone();
+        let task = tokio::spawn(async move {
+            handler
+                .handle_stream(
+                    RequestId::new(),
+                    RequestOp::Events { follow: false },
+                    sender,
+                )
+                .await
+        });
+
+        let frame = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("stream_events should deliver history in <500ms")
+            .expect("channel closed before delivering frame");
+        assert!(frame.event.is_some());
+
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), task)
+            .await
+            .expect("handler should return after draining history");
     }
 
     fn minimal_valid_program_json() -> String {
