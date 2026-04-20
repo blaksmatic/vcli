@@ -24,3 +24,7 @@ pub use config::{ensure_dirs, Config};
 pub mod pidfile;
 
 pub use pidfile::PidFile;
+
+pub mod logging;
+
+pub use logging::{init as init_logging, LogGuard};
