@@ -3,6 +3,7 @@
 //! returns `CliResult<()>`.
 
 pub mod cancel;
+pub mod daemon;
 pub mod gc;
 pub mod health;
 pub mod list;
