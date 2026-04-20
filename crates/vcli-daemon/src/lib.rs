@@ -40,3 +40,7 @@ pub use persist::{program_id_of, spawn_event_pump};
 pub mod handler;
 
 pub use handler::DaemonHandler;
+
+pub mod startup;
+
+pub use startup::{emit_daemon_started, emit_recovery_events, reload_waiting_programs};
