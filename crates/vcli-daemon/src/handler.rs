@@ -116,6 +116,70 @@ impl DaemonHandler {
         )
     }
 
+    async fn handle_list(&self, id: RequestId, state: Option<String>) -> Response {
+        let filter = state.and_then(|s| s.parse::<vcli_core::ProgramState>().ok());
+        let store = self.store.clone();
+        let rows = tokio::task::spawn_blocking(move || {
+            let s = store.lock().unwrap();
+            s.list_programs(filter)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            Err(vcli_store::StoreError::Io {
+                path: "<join>".into(),
+                source: std::io::Error::other(format!("{e}")),
+            })
+        });
+        match rows {
+            Ok(rows) => {
+                let items: Vec<_> = rows
+                    .into_iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "id": r.id.to_string(),
+                            "name": r.name,
+                            "state": r.state.as_str(),
+                            "submitted_at": r.submitted_at,
+                        })
+                    })
+                    .collect();
+                Response::ok(id, serde_json::json!({ "items": items }))
+            }
+            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+        }
+    }
+
+    async fn handle_status(&self, id: RequestId, program_id: ProgramId) -> Response {
+        let store = self.store.clone();
+        let row = tokio::task::spawn_blocking(move || {
+            let s = store.lock().unwrap();
+            s.get_program(program_id)
+        })
+        .await;
+        match row {
+            Ok(Ok(r)) => Response::ok(
+                id,
+                serde_json::json!({
+                    "id": r.id.to_string(),
+                    "name": r.name,
+                    "state": r.state.as_str(),
+                    "body_cursor": r.body_cursor,
+                    "submitted_at": r.submitted_at,
+                    "started_at": r.started_at,
+                    "finished_at": r.finished_at,
+                }),
+            ),
+            Ok(Err(vcli_store::StoreError::UnknownProgram(_))) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
+            ),
+            Ok(Err(e)) => {
+                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
+            }
+            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+        }
+    }
+
     fn handle_health(&self, id: RequestId) -> Response {
         let uptime_ms = u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         Response::ok(
@@ -142,6 +206,8 @@ impl Handler for DaemonHandler {
             RequestOp::Health => self.handle_health(id),
             RequestOp::Shutdown => self.handle_shutdown(id),
             RequestOp::Submit { program } => self.handle_submit(id, program).await,
+            RequestOp::List { state } => self.handle_list(id, state).await,
+            RequestOp::Status { program_id } => self.handle_status(id, program_id).await,
             other => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("op not yet wired: {other:?}")),
@@ -216,6 +282,80 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn list_returns_all_programs_when_no_filter() {
+        let f = fresh_handler();
+        for name in ["a", "b"] {
+            let id = ProgramId::new();
+            f.handler
+                .store
+                .lock()
+                .unwrap()
+                .insert_program(&vcli_store::NewProgram {
+                    id,
+                    name,
+                    source_json: "{}",
+                    state: vcli_core::ProgramState::Pending,
+                    submitted_at: 0,
+                    labels_json: "{}",
+                })
+                .unwrap();
+        }
+        let resp = f
+            .handler
+            .handle(RequestId::new(), RequestOp::List { state: None })
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        let items = body["result"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn status_returns_row_for_known_id() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        f.handler
+            .store
+            .lock()
+            .unwrap()
+            .insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "s",
+                source_json: "{}",
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        let resp = f
+            .handler
+            .handle(RequestId::new(), RequestOp::Status { program_id: pid })
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["result"]["name"], "s");
+        assert_eq!(body["result"]["state"], "pending");
+    }
+
+    #[tokio::test]
+    async fn status_returns_unknown_program_for_missing_id() {
+        let f = fresh_handler();
+        let resp = f
+            .handler
+            .handle(
+                RequestId::new(),
+                RequestOp::Status {
+                    program_id: ProgramId::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "unknown_program");
     }
 
     #[tokio::test]
