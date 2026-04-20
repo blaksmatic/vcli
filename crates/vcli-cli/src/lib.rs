@@ -11,8 +11,11 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod cli;
+pub mod client;
 pub mod error;
 pub mod util;
+
+pub use client::connect;
 
 pub use cli::{Cli, Command, DaemonCommand, OutputMode, StateFilter};
 pub use error::{CliError, CliResult, ExitCode};
