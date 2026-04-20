@@ -13,9 +13,11 @@
 pub mod cli;
 pub mod client;
 pub mod error;
+pub mod format;
 pub mod util;
 
 pub use client::connect;
+pub use format::{render_value, Row, Table};
 
 pub use cli::{Cli, Command, DaemonCommand, OutputMode, StateFilter};
 pub use error::{CliError, CliResult, ExitCode};
