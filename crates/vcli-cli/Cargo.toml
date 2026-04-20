@@ -1,0 +1,30 @@
+[package]
+name = "vcli-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "vcli command-line interface — thin client over the framed-JSON IPC protocol."
+
+[[bin]]
+name = "vcli"
+path = "src/bin/vcli.rs"
+
+[dependencies]
+vcli-core = { path = "../vcli-core" }
+vcli-ipc = { path = "../vcli-ipc" }
+vcli-dsl = { path = "../vcli-dsl" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "io-util", "time", "sync"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "test-util"] }
