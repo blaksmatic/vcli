@@ -197,6 +197,50 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// List programs, optionally filtered by a single [`ProgramState`].
+    /// Ordered by `submitted_at ASC` then by rowid for stability.
+    ///
+    /// # Errors
+    /// Surfaces `SQLite` errors.
+    ///
+    /// # Panics
+    /// Panics if a stored id or state value cannot be parsed (should never
+    /// happen for rows written by this crate).
+    pub fn list_programs(
+        &self,
+        state_filter: Option<ProgramState>,
+    ) -> StoreResult<Vec<ProgramRow>> {
+        let state_str = state_filter.map(|s| s.as_str().to_string());
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, source_json, state, submitted_at, started_at,
+                    finished_at, last_error_code, last_error_msg, labels_json,
+                    body_cursor, body_entered_at
+             FROM programs
+             WHERE (?1 IS NULL) OR (state = ?1)
+             ORDER BY submitted_at ASC, rowid ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![state_str], |r| {
+            let id: String = r.get(0)?;
+            let state: String = r.get(3)?;
+            let body_cursor: i64 = r.get(10)?;
+            Ok(ProgramRow {
+                id: id.parse().unwrap(),
+                name: r.get(1)?,
+                source_json: r.get(2)?,
+                state: state.parse().unwrap(),
+                submitted_at: r.get(4)?,
+                started_at: r.get(5)?,
+                finished_at: r.get(6)?,
+                last_error_code: r.get(7)?,
+                last_error_msg: r.get(8)?,
+                labels_json: r.get(9)?,
+                body_cursor: u32::try_from(body_cursor).unwrap_or(0),
+                body_entered_at: r.get(11)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 /// Values a caller supplies when inserting a new program row.
@@ -364,6 +408,49 @@ mod tests {
         s.insert_program(&new_program_row(id, "x")).unwrap();
         s.set_body_cursor(id, 7).unwrap();
         assert_eq!(s.get_program(id).unwrap().body_cursor, 7);
+    }
+
+    #[test]
+    fn list_programs_returns_all_when_no_filter() {
+        let d = tempdir().unwrap();
+        let (mut s, _) = Store::open(d.path()).unwrap();
+        for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
+            s.insert_program(&NewProgram {
+                id: ProgramId::new(),
+                name,
+                source_json: "{}",
+                state: ProgramState::Pending,
+                submitted_at: i as i64,
+                labels_json: "{}",
+            })
+            .unwrap();
+        }
+        let all = s.list_programs(None).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].name, "a");
+    }
+
+    #[test]
+    fn list_programs_filters_by_state() {
+        let d = tempdir().unwrap();
+        let (mut s, _) = Store::open(d.path()).unwrap();
+        let running = ProgramId::new();
+        let pending = ProgramId::new();
+        for (id, name) in [(running, "r"), (pending, "p")] {
+            s.insert_program(&NewProgram {
+                id,
+                name,
+                source_json: "{}",
+                state: ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        }
+        s.update_state(running, ProgramState::Running, 100).unwrap();
+        let runs = s.list_programs(Some(ProgramState::Running)).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].name, "r");
     }
 
     #[test]
