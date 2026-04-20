@@ -2,6 +2,7 @@
 //! that takes the global flags (`socket`, `output`) plus its typed args and
 //! returns `CliResult<()>`.
 
+pub mod cancel;
 pub mod gc;
 pub mod health;
 pub mod list;
