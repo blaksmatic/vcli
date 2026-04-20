@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::sync::oneshot;
-use vcli_core::{ErrorCode, ErrorPayload};
+use tracing::error;
+use vcli_core::{ErrorCode, ErrorPayload, ProgramId};
 use vcli_ipc::{
     Handler, IpcResult, RequestId, RequestOp, Response, StreamFrame, StreamKind, StreamSender,
 };
@@ -41,6 +42,80 @@ impl DaemonHandler {
         }
     }
 
+    async fn handle_submit(
+        &self,
+        id: RequestId,
+        program_json: serde_json::Value,
+    ) -> Response {
+        let program = match vcli_dsl::validate_value(&program_json) {
+            Ok(v) => v.program,
+            Err(e) => {
+                return Response::err(id, e.to_payload());
+            }
+        };
+
+        let program_id = program.id.unwrap_or_else(ProgramId::new);
+        let name = program.name.clone();
+        let canonical_bytes = match vcli_core::canonicalize(&program_json) {
+            Ok(b) => b,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    ErrorPayload::simple(ErrorCode::Internal, format!("canonicalize: {e}")),
+                );
+            }
+        };
+        let canonical = String::from_utf8(canonical_bytes)
+            .expect("canonicalize produces UTF-8 by construction");
+
+        let store = self.store.clone();
+        let pid = program_id;
+        let submitted_at = vcli_core::clock::now_unix_ms();
+        let name_for_insert = name.clone();
+        let canonical_str = canonical.clone();
+        let insert_result = tokio::task::spawn_blocking(move || {
+            let mut s = store.lock().unwrap();
+            s.insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: &name_for_insert,
+                source_json: &canonical_str,
+                state: vcli_core::ProgramState::Pending,
+                submitted_at,
+                labels_json: "{}",
+            })
+        })
+        .await;
+        let insert = match insert_result {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, "submit join error");
+                return Response::err(
+                    id,
+                    ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+                );
+            }
+        };
+        if let Err(e) = insert {
+            return Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")));
+        }
+
+        if let Err(e) = self.bridge.cmd_tx.send(SchedulerCommand::SubmitValidated {
+            program_id: pid,
+            program,
+        }) {
+            error!(error = %e, "cmd_tx full");
+            return Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::DaemonBusy, "scheduler command queue full"),
+            );
+        }
+
+        Response::ok(
+            id,
+            serde_json::json!({ "program_id": pid.to_string(), "name": name }),
+        )
+    }
+
     fn handle_health(&self, id: RequestId) -> Response {
         let uptime_ms = u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         Response::ok(
@@ -66,6 +141,7 @@ impl Handler for DaemonHandler {
         let resp = match op {
             RequestOp::Health => self.handle_health(id),
             RequestOp::Shutdown => self.handle_shutdown(id),
+            RequestOp::Submit { program } => self.handle_submit(id, program).await,
             other => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("op not yet wired: {other:?}")),
@@ -102,12 +178,6 @@ pub(crate) mod test_support {
         pub dir: TempDir,
         pub handler: DaemonHandler,
         pub shutdown_rx: oneshot::Receiver<()>,
-        // Consumed by Task 8d+ tests; kept in the bundle so the channel isn't
-        // dropped before later tasks wire assertions against it.
-        // Why: `#[allow(dead_code)]` — alive now so the cmd_tx end inside
-        //      `handler.bridge` doesn't disconnect, which would change test
-        //      semantics when 8d starts asserting on dispatched commands.
-        #[allow(dead_code)]
         pub cmd_rx: crossbeam_channel::Receiver<SchedulerCommand>,
     }
 
@@ -146,6 +216,43 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn submit_validates_and_enqueues() {
+        let f = fresh_handler();
+        let program = serde_json::json!({
+            "version": "0.1",
+            "name": "noop",
+            "trigger": { "kind": "on_submit" },
+            "predicates": {},
+            "watches": [],
+            "body": [],
+        });
+        let id = RequestId::new();
+        let resp = f
+            .handler
+            .handle(
+                id,
+                RequestOp::Submit {
+                    program: program.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        let pid: ProgramId = body["result"]["program_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let row = f.handler.store.lock().unwrap().get_program(pid).unwrap();
+        assert_eq!(row.name, "noop");
+        match f.cmd_rx.try_recv().unwrap() {
+            SchedulerCommand::SubmitValidated { program_id, .. } => assert_eq!(program_id, pid),
+            other => panic!("wrong cmd: {other:?}"),
+        }
     }
 
     #[tokio::test]
