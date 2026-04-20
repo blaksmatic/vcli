@@ -39,6 +39,7 @@ dirs               = { workspace = true }
 futures-util       = { workspace = true }
 signal-hook-tokio  = { workspace = true }
 uuid               = { workspace = true }
+libc               = { workspace = true }
 
 [dev-dependencies]
 tempfile    = { workspace = true }
