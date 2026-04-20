@@ -28,3 +28,7 @@ pub use pidfile::PidFile;
 pub mod logging;
 
 pub use logging::{init as init_logging, LogGuard};
+
+pub mod bridge;
+
+pub use bridge::{new_channels, CommandChannel, SchedulerCommand, EVENT_BROADCAST_CAPACITY};
