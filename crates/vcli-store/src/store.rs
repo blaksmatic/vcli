@@ -420,7 +420,7 @@ mod tests {
                 name,
                 source_json: "{}",
                 state: ProgramState::Pending,
-                submitted_at: i as i64,
+                submitted_at: i64::try_from(i).unwrap(),
                 labels_json: "{}",
             })
             .unwrap();
