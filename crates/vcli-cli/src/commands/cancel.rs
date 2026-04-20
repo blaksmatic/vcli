@@ -23,7 +23,11 @@ pub async fn run(socket: &Path, mode: OutputMode, args: &CancelArgs) -> CliResul
         .await?;
     match resp.body {
         ResponseBody::Ok { result, .. } => {
-            let pretty = summary(&args.program_id.to_string(), args.reason.as_deref(), &result);
+            let pretty = summary(
+                &args.program_id.to_string(),
+                args.reason.as_deref(),
+                &result,
+            );
             render_value(mode, &pretty, &result)
         }
         ResponseBody::Err { error, .. } => Err(CliError::from_payload(&error)),

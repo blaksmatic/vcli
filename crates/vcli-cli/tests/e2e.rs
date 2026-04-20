@@ -233,14 +233,9 @@ async fn daemon_status_without_socket_reports_not_running() {
     use vcli_cli::cli::DaemonCommand;
     let bogus = PathBuf::from("/tmp/vcli-definitely-does-not-exist.sock");
     let mut buf: Vec<u8> = Vec::new();
-    commands::daemon::run(
-        &bogus,
-        OutputMode::Pretty,
-        &DaemonCommand::Status,
-        &mut buf,
-    )
-    .await
-    .unwrap();
+    commands::daemon::run(&bogus, OutputMode::Pretty, &DaemonCommand::Status, &mut buf)
+        .await
+        .unwrap();
     let out = String::from_utf8(buf).unwrap();
     assert!(out.contains("not running"), "{out}");
 }

@@ -55,9 +55,15 @@ fn json_flag_is_global() {
 #[test]
 fn socket_flag_is_global() {
     let c = ok(&["vcli", "--socket", "/tmp/x.sock", "health"]);
-    assert_eq!(c.socket.as_deref().unwrap().to_str().unwrap(), "/tmp/x.sock");
+    assert_eq!(
+        c.socket.as_deref().unwrap().to_str().unwrap(),
+        "/tmp/x.sock"
+    );
     let c = ok(&["vcli", "health", "--socket", "/tmp/y.sock"]);
-    assert_eq!(c.socket.as_deref().unwrap().to_str().unwrap(), "/tmp/y.sock");
+    assert_eq!(
+        c.socket.as_deref().unwrap().to_str().unwrap(),
+        "/tmp/y.sock"
+    );
 }
 
 #[test]

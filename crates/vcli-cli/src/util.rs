@@ -43,8 +43,8 @@ pub fn read_program_file(path: &Path) -> CliResult<serde_json::Value> {
             meta.len()
         )));
     }
-    let bytes = fs::read(path)
-        .map_err(|e| CliError::Generic(format!("read {}: {e}", path.display())))?;
+    let bytes =
+        fs::read(path).map_err(|e| CliError::Generic(format!("read {}: {e}", path.display())))?;
     serde_json::from_slice::<serde_json::Value>(&bytes)
         .map_err(|e| CliError::Validation(format!("invalid JSON in {}: {e}", path.display())))
 }

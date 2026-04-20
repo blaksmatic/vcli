@@ -59,12 +59,7 @@ fn daemon_status_without_socket_exits_zero() {
     let sock = tmp.path().join("vcli.sock");
     Command::cargo_bin("vcli")
         .unwrap()
-        .args([
-            "--socket",
-            sock.to_str().unwrap(),
-            "daemon",
-            "status",
-        ])
+        .args(["--socket", sock.to_str().unwrap(), "daemon", "status"])
         .assert()
         .success()
         .stdout(predicate::str::contains("not running"));
