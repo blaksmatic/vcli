@@ -180,6 +180,32 @@ impl DaemonHandler {
         }
     }
 
+    async fn handle_gc(&self, id: RequestId) -> Response {
+        let store = self.store.clone();
+        let now = vcli_core::clock::now_unix_ms();
+        let cutoff = now - i64::from(vcli_store::RETENTION_DAYS) * 24 * 60 * 60 * 1000;
+        let report = tokio::task::spawn_blocking(move || {
+            let mut s = store.lock().unwrap();
+            s.gc_all(cutoff)
+        })
+        .await;
+        match report {
+            Ok(Ok(r)) => Response::ok(
+                id,
+                serde_json::json!({
+                    "programs_deleted": r.programs_deleted,
+                    "assets_deleted": r.assets_deleted,
+                    "blobs_deleted": r.blobs_deleted,
+                    "orphan_blobs_deleted": r.orphan_blobs_deleted,
+                }),
+            ),
+            Ok(Err(e)) => {
+                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
+            }
+            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+        }
+    }
+
     async fn handle_resume(
         &self,
         id: RequestId,
@@ -357,6 +383,7 @@ impl Handler for DaemonHandler {
                 program_id,
                 from_start,
             } => self.handle_resume(id, program_id, from_start).await,
+            RequestOp::Gc => self.handle_gc(id).await,
             other => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("op not yet wired: {other:?}")),
@@ -446,6 +473,20 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn gc_returns_report_shape() {
+        let f = fresh_handler();
+        let resp = f
+            .handler
+            .handle(RequestId::new(), RequestOp::Gc)
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        assert!(body["result"]["programs_deleted"].as_u64().is_some());
+        assert!(body["result"]["assets_deleted"].as_u64().is_some());
     }
 
     #[tokio::test]
