@@ -8,3 +8,4 @@ pub mod health;
 pub mod list;
 pub mod logs;
 pub mod resume;
+pub mod submit;
