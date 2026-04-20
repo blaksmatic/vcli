@@ -12,9 +12,11 @@
 
 pub mod cli;
 pub mod error;
+pub mod util;
 
 pub use cli::{Cli, Command, DaemonCommand, OutputMode, StateFilter};
 pub use error::{CliError, CliResult, ExitCode};
+pub use util::{format_unix_ms, read_program_file, resolve_socket};
 
 /// Entry point used by `src/bin/vcli.rs`. Returns the process exit code
 /// (spec §589: `0`, `1`, `2`, `3`, `4`).
