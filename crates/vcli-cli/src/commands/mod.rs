@@ -6,4 +6,5 @@ pub mod cancel;
 pub mod gc;
 pub mod health;
 pub mod list;
+pub mod logs;
 pub mod resume;
