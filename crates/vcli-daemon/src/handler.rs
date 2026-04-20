@@ -116,6 +116,33 @@ impl DaemonHandler {
         )
     }
 
+    fn handle_cancel(&self, id: RequestId, pid: ProgramId) -> Response {
+        match self.bridge.cmd_tx.send(SchedulerCommand::Cancel {
+            program_id: pid,
+            reason: "user".into(),
+        }) {
+            Ok(()) => Response::ok(id, serde_json::json!({ "program_id": pid.to_string() })),
+            Err(_) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::DaemonBusy, "cmd queue full"),
+            ),
+        }
+    }
+
+    fn handle_start(&self, id: RequestId, pid: ProgramId) -> Response {
+        match self
+            .bridge
+            .cmd_tx
+            .send(SchedulerCommand::Start { program_id: pid })
+        {
+            Ok(()) => Response::ok(id, serde_json::json!({ "program_id": pid.to_string() })),
+            Err(_) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::DaemonBusy, "cmd queue full"),
+            ),
+        }
+    }
+
     async fn handle_list(&self, id: RequestId, state: Option<String>) -> Response {
         let filter = state.and_then(|s| s.parse::<vcli_core::ProgramState>().ok());
         let store = self.store.clone();
@@ -208,6 +235,8 @@ impl Handler for DaemonHandler {
             RequestOp::Submit { program } => self.handle_submit(id, program).await,
             RequestOp::List { state } => self.handle_list(id, state).await,
             RequestOp::Status { program_id } => self.handle_status(id, program_id).await,
+            RequestOp::Cancel { program_id } => self.handle_cancel(id, program_id),
+            RequestOp::Start { program_id } => self.handle_start(id, program_id),
             other => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("op not yet wired: {other:?}")),
@@ -282,6 +311,40 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn cancel_sends_command_and_returns_ok() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        let resp = f
+            .handler
+            .handle(RequestId::new(), RequestOp::Cancel { program_id: pid })
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        match f.cmd_rx.try_recv().unwrap() {
+            SchedulerCommand::Cancel { program_id, .. } => assert_eq!(program_id, pid),
+            other => panic!("wrong cmd: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_sends_command_and_returns_ok() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        let resp = f
+            .handler
+            .handle(RequestId::new(), RequestOp::Start { program_id: pid })
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        match f.cmd_rx.try_recv().unwrap() {
+            SchedulerCommand::Start { program_id } => assert_eq!(program_id, pid),
+            other => panic!("wrong cmd: {other:?}"),
+        }
     }
 
     #[tokio::test]
