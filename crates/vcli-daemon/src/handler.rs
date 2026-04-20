@@ -116,6 +116,58 @@ impl DaemonHandler {
         )
     }
 
+    async fn handle_resume(
+        &self,
+        id: RequestId,
+        pid: ProgramId,
+        from_start: bool,
+    ) -> Response {
+        let store = self.store.clone();
+        let now_ms = vcli_core::clock::now_unix_ms();
+        let resume_result = tokio::task::spawn_blocking(move || {
+            let mut s = store.lock().unwrap();
+            let outcome = s.resume_program(pid, from_start, now_ms)?;
+            let row = s.get_program(pid)?;
+            let value: serde_json::Value = serde_json::from_str(&row.source_json)?;
+            let program = vcli_dsl::validate_value(&value)
+                .map(|v| v.program)
+                .map_err(|e| vcli_store::StoreError::Io {
+                    path: "<dsl>".into(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{e}"),
+                    ),
+                })?;
+            Ok::<_, vcli_store::StoreError>((outcome, program))
+        })
+        .await;
+
+        match resume_result {
+            Ok(Ok((out, program))) => {
+                let _ = self.bridge.cmd_tx.send(SchedulerCommand::ResumeRunning {
+                    program_id: pid,
+                    from_step: out.from_step,
+                    program,
+                });
+                Response::ok(
+                    id,
+                    serde_json::json!({ "program_id": pid.to_string(), "from_step": out.from_step }),
+                )
+            }
+            Ok(Err(vcli_store::StoreError::NotResumable(m))) => {
+                Response::err(id, ErrorPayload::simple(ErrorCode::NotResumable, m))
+            }
+            Ok(Err(vcli_store::StoreError::UnknownProgram(_))) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
+            ),
+            Ok(Err(e)) => {
+                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
+            }
+            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+        }
+    }
+
     fn handle_cancel(&self, id: RequestId, pid: ProgramId) -> Response {
         match self.bridge.cmd_tx.send(SchedulerCommand::Cancel {
             program_id: pid,
@@ -237,6 +289,10 @@ impl Handler for DaemonHandler {
             RequestOp::Status { program_id } => self.handle_status(id, program_id).await,
             RequestOp::Cancel { program_id } => self.handle_cancel(id, program_id),
             RequestOp::Start { program_id } => self.handle_start(id, program_id),
+            RequestOp::Resume {
+                program_id,
+                from_start,
+            } => self.handle_resume(id, program_id, from_start).await,
             other => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("op not yet wired: {other:?}")),
@@ -311,6 +367,102 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert!(body["result"]["version"].as_str().is_some());
         assert!(body["result"]["uptime_ms"].as_u64().is_some());
+    }
+
+    fn minimal_valid_program_json() -> String {
+        serde_json::json!({
+            "version": "0.1",
+            "name": "r",
+            "trigger": { "kind": "on_submit" },
+            "predicates": {},
+            "watches": [],
+            "body": [],
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn resume_transitions_store_and_sends_command() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        let path = f.dir.path().to_path_buf();
+        let src = minimal_valid_program_json();
+        {
+            let mut s = f.handler.store.lock().unwrap();
+            s.insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "r",
+                source_json: &src,
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+            s.update_state(pid, vcli_core::ProgramState::Running, 1)
+                .unwrap();
+            s.set_body_cursor(pid, 3).unwrap();
+        }
+        // Trigger a recovery cycle by reopening the same DB.
+        let (_, _) = vcli_store::Store::open(&path).unwrap();
+
+        let resp = f
+            .handler
+            .handle(
+                RequestId::new(),
+                RequestOp::Resume {
+                    program_id: pid,
+                    from_start: false,
+                },
+            )
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["result"]["from_step"], 3);
+        match f.cmd_rx.try_recv().unwrap() {
+            SchedulerCommand::ResumeRunning {
+                program_id,
+                from_step,
+                ..
+            } => {
+                assert_eq!(program_id, pid);
+                assert_eq!(from_step, 3);
+            }
+            other => panic!("wrong cmd: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_non_resumable_program() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        f.handler
+            .store
+            .lock()
+            .unwrap()
+            .insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "r",
+                source_json: "{}",
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        let resp = f
+            .handler
+            .handle(
+                RequestId::new(),
+                RequestOp::Resume {
+                    program_id: pid,
+                    from_start: false,
+                },
+            )
+            .await
+            .unwrap();
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "not_resumable");
     }
 
     #[tokio::test]
