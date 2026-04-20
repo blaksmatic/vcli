@@ -54,5 +54,8 @@ async fn shutdown_unlinks_socket_file() {
 
     assert!(!sock.exists(), "socket should be unlinked after shutdown");
     let pidfile = dir.path().join("data").join("daemon.pid");
-    assert!(!pidfile.exists(), "pidfile should be removed after shutdown");
+    assert!(
+        !pidfile.exists(),
+        "pidfile should be removed after shutdown"
+    );
 }

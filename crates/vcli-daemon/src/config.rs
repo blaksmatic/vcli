@@ -77,7 +77,10 @@ impl Config {
 #[cfg(target_os = "macos")]
 fn platform_data_root() -> DaemonResult<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| DaemonError::Paths("no home dir".into()))?;
-    Ok(home.join("Library").join("Application Support").join("vcli"))
+    Ok(home
+        .join("Library")
+        .join("Application Support")
+        .join("vcli"))
 }
 
 #[cfg(target_os = "macos")]
@@ -134,7 +137,10 @@ mod tests {
             fake_sock(&d.path().join("vcli.sock")),
         );
         assert_eq!(cfg.pidfile_path(), d.path().join("data").join("daemon.pid"));
-        assert_eq!(cfg.log_file_path(), d.path().join("logs").join("daemon.log"));
+        assert_eq!(
+            cfg.log_file_path(),
+            d.path().join("logs").join("daemon.log")
+        );
     }
 
     #[test]
@@ -154,9 +160,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn platform_defaults_use_library_on_macos() {
         let got = platform_data_root().unwrap();
-        assert!(
-            got.ends_with("Library/Application Support/vcli"),
-            "{got:?}"
-        );
+        assert!(got.ends_with("Library/Application Support/vcli"), "{got:?}");
     }
 }

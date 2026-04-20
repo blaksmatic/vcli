@@ -2183,6 +2183,7 @@ dependencies = [
  "dirs",
  "fs2",
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "signal-hook-tokio",

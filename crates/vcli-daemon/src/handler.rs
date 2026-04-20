@@ -42,11 +42,7 @@ impl DaemonHandler {
         }
     }
 
-    async fn handle_submit(
-        &self,
-        id: RequestId,
-        program_json: serde_json::Value,
-    ) -> Response {
+    async fn handle_submit(&self, id: RequestId, program_json: serde_json::Value) -> Response {
         let program = match vcli_dsl::validate_value(&program_json) {
             Ok(v) => v.program,
             Err(e) => {
@@ -96,7 +92,10 @@ impl DaemonHandler {
             }
         };
         if let Err(e) = insert {
-            return Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")));
+            return Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            );
         }
 
         if let Err(e) = self.bridge.cmd_tx.send(SchedulerCommand::SubmitValidated {
@@ -199,19 +198,18 @@ impl DaemonHandler {
                     "orphan_blobs_deleted": r.orphan_blobs_deleted,
                 }),
             ),
-            Ok(Err(e)) => {
-                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
-            }
-            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+            Ok(Err(e)) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
+            Err(e) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
         }
     }
 
-    async fn handle_resume(
-        &self,
-        id: RequestId,
-        pid: ProgramId,
-        from_start: bool,
-    ) -> Response {
+    async fn handle_resume(&self, id: RequestId, pid: ProgramId, from_start: bool) -> Response {
         let store = self.store.clone();
         let now_ms = vcli_core::clock::now_unix_ms();
         let resume_result = tokio::task::spawn_blocking(move || {
@@ -223,10 +221,7 @@ impl DaemonHandler {
                 .map(|v| v.program)
                 .map_err(|e| vcli_store::StoreError::Io {
                     path: "<dsl>".into(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("{e}"),
-                    ),
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}")),
                 })?;
             Ok::<_, vcli_store::StoreError>((outcome, program))
         })
@@ -251,10 +246,14 @@ impl DaemonHandler {
                 id,
                 ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
             ),
-            Ok(Err(e)) => {
-                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
-            }
-            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+            Ok(Err(e)) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
+            Err(e) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
         }
     }
 
@@ -314,7 +313,10 @@ impl DaemonHandler {
                     .collect();
                 Response::ok(id, serde_json::json!({ "items": items }))
             }
-            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+            Err(e) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
         }
     }
 
@@ -342,10 +344,14 @@ impl DaemonHandler {
                 id,
                 ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
             ),
-            Ok(Err(e)) => {
-                Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))
-            }
-            Err(e) => Response::err(id, ErrorPayload::simple(ErrorCode::Internal, format!("{e}"))),
+            Ok(Err(e)) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
+            Err(e) => Response::err(
+                id,
+                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
+            ),
         }
     }
 
@@ -392,18 +398,12 @@ impl Handler for DaemonHandler {
         Ok(resp)
     }
 
-    async fn handle_stream(
-        &self,
-        id: RequestId,
-        op: RequestOp,
-        tx: StreamSender,
-    ) -> IpcResult<()> {
+    async fn handle_stream(&self, id: RequestId, op: RequestOp, tx: StreamSender) -> IpcResult<()> {
         match op {
             RequestOp::Events { follow } => self.stream_events(id, None, follow, tx).await,
-            RequestOp::Logs {
-                program_id,
-                follow,
-            } => self.stream_events(id, Some(program_id), follow, tx).await,
+            RequestOp::Logs { program_id, follow } => {
+                self.stream_events(id, Some(program_id), follow, tx).await
+            }
             RequestOp::Trace { program_id: _ } => {
                 // v0 minimum: empty trace; server writes end_of_stream on return.
                 let _ = tx;
