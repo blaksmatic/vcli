@@ -16,3 +16,7 @@
 pub mod error;
 
 pub use error::{DaemonError, DaemonResult};
+
+pub mod config;
+
+pub use config::{ensure_dirs, Config};
