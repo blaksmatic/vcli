@@ -36,3 +36,7 @@ pub use bridge::{new_channels, CommandChannel, SchedulerCommand, EVENT_BROADCAST
 pub mod persist;
 
 pub use persist::{program_id_of, spawn_event_pump};
+
+pub mod handler;
+
+pub use handler::DaemonHandler;
