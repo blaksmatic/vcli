@@ -68,8 +68,8 @@ impl CliError {
 
     /// Build a `CliError` from a daemon-side `ErrorPayload`.
     #[must_use]
-    pub fn from_payload(p: ErrorPayload) -> Self {
-        let text = format_payload(&p);
+    pub fn from_payload(p: &ErrorPayload) -> Self {
+        let text = format_payload(p);
         match p.code {
             ErrorCode::InvalidProgram => Self::Validation(text),
             ErrorCode::UnknownProgram => Self::NotFound(text),
@@ -85,15 +85,16 @@ impl CliError {
 }
 
 fn format_payload(p: &ErrorPayload) -> String {
+    use std::fmt::Write as _;
     let mut out = p.message.clone();
     if let Some(path) = &p.path {
-        out.push_str(&format!(" (at {path})"));
+        let _ = write!(out, " (at {path})");
     }
     if let (Some(line), Some(col)) = (p.line, p.column) {
-        out.push_str(&format!(" [line {line}, col {col}]"));
+        let _ = write!(out, " [line {line}, col {col}]");
     }
     if let Some(hint) = &p.hint {
-        out.push_str(&format!(" — did you mean `{hint}`?"));
+        let _ = write!(out, " — did you mean `{hint}`?");
     }
     out
 }
@@ -169,21 +170,21 @@ mod tests {
     #[test]
     fn from_payload_invalid_program_is_validation() {
         let p = ErrorPayload::simple(ErrorCode::InvalidProgram, "unknown predicate");
-        let e = CliError::from_payload(p);
+        let e = CliError::from_payload(&p);
         assert!(matches!(e, CliError::Validation(_)));
     }
 
     #[test]
     fn from_payload_unknown_program_is_not_found() {
         let p = ErrorPayload::simple(ErrorCode::UnknownProgram, "no such id");
-        let e = CliError::from_payload(p);
+        let e = CliError::from_payload(&p);
         assert!(matches!(e, CliError::NotFound(_)));
     }
 
     #[test]
     fn from_payload_internal_is_generic() {
         let p = ErrorPayload::simple(ErrorCode::Internal, "boom");
-        let e = CliError::from_payload(p);
+        let e = CliError::from_payload(&p);
         assert!(matches!(e, CliError::Generic(_)));
     }
 
@@ -198,7 +199,7 @@ mod tests {
             span_len: Some(3),
             hint: Some("skip".into()),
         };
-        let e = CliError::from_payload(p);
+        let e = CliError::from_payload(&p);
         let s = e.to_string();
         assert!(s.contains("watches[0].when"), "{s}");
         assert!(s.contains("line 12"), "{s}");

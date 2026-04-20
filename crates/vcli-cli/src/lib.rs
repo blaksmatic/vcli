@@ -10,8 +10,10 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod cli;
 pub mod error;
 
+pub use cli::{Cli, Command, DaemonCommand, OutputMode, StateFilter};
 pub use error::{CliError, CliResult, ExitCode};
 
 /// Entry point used by `src/bin/vcli.rs`. Returns the process exit code
