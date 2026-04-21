@@ -21,7 +21,7 @@ pub use frame::{Frame, FrameFormat};
 
 pub mod clock;
 
-pub use clock::{Clock, SystemClock, TestClock, UnixMs};
+pub use clock::{now_unix_ms, Clock, SystemClock, TestClock, UnixMs};
 
 pub mod region;
 

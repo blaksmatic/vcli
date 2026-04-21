@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/vcli-core",
     "crates/vcli-capture",
+    "crates/vcli-daemon",
     "crates/vcli-dsl",
     "crates/vcli-input",
     "crates/vcli-ipc",
@@ -29,9 +30,17 @@ ryu = "1"
 unicode-normalization = "0.1"
 
 # Added by vcli-ipc lane
-tokio = { version = "1", features = ["net", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt-multi-thread", "sync", "time", "signal"] }
 async-trait = "0.1"
 futures-core = "0.3"
+
+# Added by vcli-daemon lane
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
+tracing-appender = "0.2"
+fs2 = "0.4"
+dirs = "5"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+futures-util = "0.3"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"

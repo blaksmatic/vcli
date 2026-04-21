@@ -109,6 +109,25 @@ impl Clock for TestClock {
     }
 }
 
+/// Convenience for callers that just want wall-clock ms and do not hold a
+/// `Clock` handle. Equivalent to `SystemClock::new().unix_ms()`. Non-test code
+/// outside the scheduler uses this for event timestamps.
+#[must_use]
+pub fn now_unix_ms() -> UnixMs {
+    SystemClock::new().unix_ms()
+}
+
+#[cfg(test)]
+mod now_unix_ms_tests {
+    use super::*;
+
+    #[test]
+    fn now_unix_ms_is_positive_and_recent() {
+        let t = now_unix_ms();
+        assert!(t > 1_700_000_000_000, "got {t}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

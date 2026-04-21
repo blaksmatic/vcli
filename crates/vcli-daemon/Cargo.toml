@@ -1,0 +1,47 @@
+[package]
+name = "vcli-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The vcli daemon binary — tokio reactor + scheduler bridge + socket server."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vcli-daemon"
+path = "src/bin/vcli-daemon.rs"
+
+[dependencies]
+vcli-core       = { path = "../vcli-core" }
+vcli-dsl        = { path = "../vcli-dsl" }
+vcli-store      = { path = "../vcli-store" }
+vcli-ipc        = { path = "../vcli-ipc" }
+vcli-capture    = { path = "../vcli-capture" }
+vcli-input      = { path = "../vcli-input" }
+vcli-perception = { path = "../vcli-perception" }
+vcli-runtime    = { path = "../vcli-runtime" }
+
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+thiserror          = { workspace = true }
+async-trait        = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender   = { workspace = true }
+crossbeam-channel  = { workspace = true }
+fs2                = { workspace = true }
+dirs               = { workspace = true }
+futures-util       = { workspace = true }
+signal-hook-tokio  = { workspace = true }
+uuid               = { workspace = true }
+libc               = { workspace = true }
+
+[dev-dependencies]
+tempfile    = { workspace = true }
+tokio-test  = { workspace = true }
+tokio       = { workspace = true, features = ["test-util"] }
