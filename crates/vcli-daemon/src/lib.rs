@@ -80,11 +80,4 @@ pub fn build_default_backends() -> error::DaemonResult<run::RuntimeBackends> {
 }
 
 #[cfg(target_os = "macos")]
-mod factory_macos {
-    use crate::error::DaemonResult;
-    use crate::run::RuntimeBackends;
-    /// Stub — replaced in Task 4 with the real macOS wiring.
-    pub fn build() -> DaemonResult<RuntimeBackends> {
-        crate::factory_mock::build()
-    }
-}
+mod factory_macos;
