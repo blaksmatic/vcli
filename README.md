@@ -18,7 +18,7 @@ The thesis: an agent shouldn't need one LLM call per frame. Submit a JSON *progr
 | `vcli-capture` | `Capture` trait + macOS ScreenCaptureKit + `MockCapture` | ✅ |
 | `vcli-perception` | Tier-1/2 predicate evaluators + per-tick DashMap cache | ✅ |
 | `vcli-daemon` | Tick loop wiring capture → perception → scheduler → input | ✅ (macOS) / 🚧 (Windows v0.4) |
-| `vcli-cli` | `vcli submit`, `list`, `cancel`, `logs` | ✅ (macOS) / 🚧 (Windows v0.4) |
+| `vcli-cli` | `vcli submit`, `list`, `cancel`, `logs` | ✅ |
 
 macOS is the primary target; Windows ships in v0.4 (each platform-specific crate exposes a Windows stub so the workspace builds cross-platform today).
 
