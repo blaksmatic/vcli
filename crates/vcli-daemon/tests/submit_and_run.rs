@@ -17,6 +17,7 @@ fn mocks() -> Result<RuntimeBackends, vcli_daemon::DaemonError> {
         input: Arc::new(vcli_input::MockInputSink::new()),
         perception: vcli_perception::Perception::default(),
         clock: Arc::new(vcli_runtime::SystemRuntimeClock::new()),
+        _shutdown_guard: None,
     })
 }
 

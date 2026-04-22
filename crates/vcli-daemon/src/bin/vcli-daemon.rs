@@ -69,5 +69,6 @@ fn default_runtime_factory() -> Result<RuntimeBackends, DaemonError> {
         input,
         perception,
         clock,
+        _shutdown_guard: None,
     })
 }
