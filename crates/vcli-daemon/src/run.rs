@@ -60,6 +60,12 @@ pub type RuntimeFactory = Box<dyn FnOnce() -> DaemonResult<RuntimeBackends> + Se
 pub async fn run_foreground(cfg: Config, factory: RuntimeFactory) -> DaemonResult<()> {
     ensure_dirs(&cfg)?;
     let _log_guard = crate::logging::init(&cfg.log_dir)?;
+    let report = vcli_input::permissions::probe();
+    tracing::info!(
+        accessibility = ?report.accessibility,
+        input_monitoring = ?report.input_monitoring,
+        "input permission probe"
+    );
     info!(
         data_root = %cfg.data_root.display(),
         socket = %cfg.socket.path.display(),

@@ -41,15 +41,6 @@ fn main() -> ExitCode {
 
     let factory: vcli_daemon::RuntimeFactory = Box::new(default_runtime_factory);
 
-    {
-        let report = vcli_input::permissions::probe();
-        tracing::info!(
-            accessibility = ?report.accessibility,
-            input_monitoring = ?report.input_monitoring,
-            "input permission probe"
-        );
-    }
-
     match rt.block_on(run_foreground(cfg, factory)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(DaemonError::AlreadyRunning { pid, .. }) => {
@@ -65,7 +56,7 @@ fn main() -> ExitCode {
 
 /// Real-backend factory used in production. On macOS this constructs the
 /// real `MacCapture` + `CGEventInputSink`; on every other platform it
-/// falls back to mocks (Windows real backends arrive in v0.4 per Decision G).
+/// falls back to mocks (Windows real backends arrive in v0.4 — see README status table).
 fn default_runtime_factory() -> Result<vcli_daemon::RuntimeBackends, DaemonError> {
     vcli_daemon::build_default_backends()
 }
