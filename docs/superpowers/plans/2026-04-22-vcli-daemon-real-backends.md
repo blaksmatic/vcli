@@ -419,6 +419,11 @@ use crate::run::RuntimeBackends;
 
 /// Build the production macOS `RuntimeBackends`.
 ///
+/// Two of the three real-backend constructors are fallible:
+/// - `MacCapture::new()` returns `Result<Self, CaptureError>` (TCC probe).
+/// - `spawn_kill_switch_listener()` returns `Result<KillSwitchListenerHandle, InputError>`.
+/// - `CGEventInputSink::new(kill)` is infallible (`-> Self`).
+///
 /// # Errors
 ///
 /// `DaemonError::BackendInit { backend: "capture", .. }` if Screen Recording
@@ -443,6 +448,7 @@ pub fn build() -> DaemonResult<RuntimeBackends> {
             ),
         }
     })?;
+    // CGEventInputSink::new is infallible — no `?` here.
     let input = CGEventInputSink::new(kill);
 
     Ok(RuntimeBackends {
