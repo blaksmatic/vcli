@@ -6,7 +6,7 @@
 
 use std::process::ExitCode;
 
-use vcli_daemon::{run_foreground, Config, DaemonError, RuntimeBackends};
+use vcli_daemon::{run_foreground, Config, DaemonError};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -41,6 +41,15 @@ fn main() -> ExitCode {
 
     let factory: vcli_daemon::RuntimeFactory = Box::new(default_runtime_factory);
 
+    {
+        let report = vcli_input::permissions::probe();
+        tracing::info!(
+            accessibility = ?report.accessibility,
+            input_monitoring = ?report.input_monitoring,
+            "input permission probe"
+        );
+    }
+
     match rt.block_on(run_foreground(cfg, factory)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(DaemonError::AlreadyRunning { pid, .. }) => {
@@ -54,21 +63,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// Real-backend factory used in production. For v0 the daemon binary falls
-/// back to mock backends on every platform — a future lane wires the real
-/// macOS capture + input.
-fn default_runtime_factory() -> Result<RuntimeBackends, DaemonError> {
-    let capture: Box<dyn vcli_capture::Capture> = Box::new(vcli_capture::MockCapture::empty());
-    let input: std::sync::Arc<dyn vcli_input::InputSink> =
-        std::sync::Arc::new(vcli_input::MockInputSink::new());
-    let perception = vcli_perception::Perception::default();
-    let clock: std::sync::Arc<dyn vcli_runtime::RuntimeClock> =
-        std::sync::Arc::new(vcli_runtime::SystemRuntimeClock::new());
-    Ok(RuntimeBackends {
-        capture,
-        input,
-        perception,
-        clock,
-        _shutdown_guard: None,
-    })
+/// Real-backend factory used in production. On macOS this constructs the
+/// real `MacCapture` + `CGEventInputSink`; on every other platform it
+/// falls back to mocks (Windows real backends arrive in v0.4 per Decision G).
+fn default_runtime_factory() -> Result<vcli_daemon::RuntimeBackends, DaemonError> {
+    vcli_daemon::build_default_backends()
 }
