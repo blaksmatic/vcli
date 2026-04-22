@@ -49,6 +49,42 @@ pub mod shutdown;
 
 pub use shutdown::{emit_daemon_stopped, install_signal_handlers};
 
+pub mod factory_mock;
+
 pub mod run;
 
 pub use run::{run_foreground, RuntimeBackends, RuntimeFactory};
+
+/// Build the default `RuntimeBackends` for the platform the daemon was
+/// compiled for. On macOS this constructs the real `MacCapture` +
+/// `CGEventInputSink` (and starts the kill-switch listener). On every
+/// other platform this returns the mock bundle from `factory_mock`.
+///
+/// The binary entry point in `bin/vcli-daemon.rs` calls this. Tests
+/// continue to inject their own factories via `RuntimeFactory`.
+///
+/// # Errors
+///
+/// On macOS: any `DaemonError::BackendInit` from the real-backend
+/// constructor (typically a TCC permission failure for Screen Recording).
+/// On other platforms: never fails.
+pub fn build_default_backends() -> error::DaemonResult<run::RuntimeBackends> {
+    #[cfg(target_os = "macos")]
+    {
+        factory_macos::build()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        factory_mock::build()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod factory_macos {
+    use crate::error::DaemonResult;
+    use crate::run::RuntimeBackends;
+    /// Stub — replaced in Task 4 with the real macOS wiring.
+    pub fn build() -> DaemonResult<RuntimeBackends> {
+        crate::factory_mock::build()
+    }
+}
