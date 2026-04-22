@@ -17,8 +17,8 @@ The thesis: an agent shouldn't need one LLM call per frame. Submit a JSON *progr
 | `vcli-input` | `InputSink` trait + macOS CGEvent backend + kill-switch chord | ✅ |
 | `vcli-capture` | `Capture` trait + macOS ScreenCaptureKit + `MockCapture` | ✅ |
 | `vcli-perception` | Tier-1/2 predicate evaluators + per-tick DashMap cache | ✅ |
-| `vcli-daemon` | Tick loop wiring capture → perception → scheduler → input | ⏳ |
-| `vcli-cli` | `vcli submit`, `list`, `cancel`, `logs` | ⏳ |
+| `vcli-daemon` | Tick loop wiring capture → perception → scheduler → input | ✅ (macOS) / 🚧 (Windows v0.4) |
+| `vcli-cli` | `vcli submit`, `list`, `cancel`, `logs` | ✅ (macOS) / 🚧 (Windows v0.4) |
 
 macOS is the primary target; Windows ships in v0.4 (each platform-specific crate exposes a Windows stub so the workspace builds cross-platform today).
 
@@ -35,6 +35,31 @@ cargo fmt --all -- --check
 ```
 
 The workspace pins Rust via [`rust-toolchain.toml`](rust-toolchain.toml) and uses `#![forbid(unsafe_code)]` everywhere except for the thin FFI layers in `vcli-input` (CGEvent) and `vcli-capture` (ScreenCaptureKit).
+
+## First run on macOS
+
+The daemon needs three macOS TCC grants to actually capture and click. Build, then start once and grant the prompts:
+
+```bash
+cargo build --release
+./target/release/vcli daemon start    # may print "spawn daemon: No such file or directory"
+                                       # if vcli-daemon isn't on PATH; see below
+```
+
+If `vcli daemon start` cannot find `vcli-daemon`, prepend the release dir to `PATH`:
+
+```bash
+export PATH="$PWD/target/release:$PATH"
+vcli daemon start
+```
+
+On first run the daemon will fail with `BackendInit: capture backend init failed: ... grant access in System Settings → Privacy & Security → Screen Recording`. Open that pane, grant access to `vcli-daemon`, then run `vcli daemon start` again. You will see another prompt for Input Monitoring (kill-switch tap); grant it. The third bucket — Accessibility — is needed for `CGEventPost` to actually post events; the daemon does not start the input pipeline until the first `click` action, so you'll see that prompt appear when your first program tries to click.
+
+A quick sanity check on capture without involving the daemon:
+
+```bash
+cargo run -p vcli-capture --example capture_once -- --save /tmp/vcli-frame.png
+```
 
 ## Docs
 
