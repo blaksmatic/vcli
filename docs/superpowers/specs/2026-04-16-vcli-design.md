@@ -1181,6 +1181,32 @@ Phase B — optional user-initiated resume
   Emit program.resumed { from_step }
 ```
 
+## Backend wiring decisions — 2026-04-22 (post-ship)
+
+Plan-4 (`vcli-daemon`) shipped (PR #10) with `MockCapture::empty()` and `MockInputSink::new()` hardcoded in `default_runtime_factory`. The released binary cannot capture screens or synthesize input; every tick logs `MockCapture has no screen frames configured`. This appendix specifies the wiring of the real macOS backends so the binary delivers the v0 thesis from §Summary. Implemented by `docs/superpowers/plans/2026-04-22-vcli-daemon-real-backends.md`.
+
+### Decisions
+
+- **B1.** On `target_os = "macos"`, `default_runtime_factory` constructs `vcli_capture::macos::MacCapture::new()` (fallible — TCC) and `vcli_input::macos::CGEventInputSink::new(kill)` (infallible). On every other platform, the factory keeps the v0 mocks. Windows backends arrive in v0.4 per the README status table (`vcli-capture` / `vcli-input` Windows stubs are present today; real implementations are deferred); this appendix does not bring them forward.
+- **B2.** The kill-switch tap (`Cmd+Shift+Esc` halts input dispatch — Decision B / spec §Safety) starts via `vcli_input::macos::spawn_kill_switch_listener(kill)` and its handle lives as long as `RuntimeBackends`. Dropping `RuntimeBackends` at daemon shutdown tears down the tap thread cleanly. Non-macOS builds carry no listener.
+- **B3.** `RuntimeBackends` gains a type-erased field `_shutdown_guard: Option<Box<dyn std::any::Any + Send + Sync>>`. The macOS factory parks the kill-switch handle here; mock factories leave it `None`. Type erasure avoids a cfg-gated public type in the daemon crate's API surface — callers (including tests) never need to name `KillSwitchListenerHandle`. The `Any` box's `Drop` runs the inner handle's `Drop`, which is sufficient.
+- **B4.** Daemon startup logs `vcli_input::permissions::probe()` at INFO level on every boot (one structured `tracing::info!` event with the report fields). A user who hits a `permission_denied` runtime error can scroll back one log line to see whether Accessibility / Input Monitoring were granted at boot. The probe is non-prompting — it never opens a system dialog.
+- **B5.** `MacCapture::new()` returning `CaptureError::PermissionDenied` is mapped to a new `DaemonError::BackendInit { backend: &'static str, reason: String }` variant. The daemon refuses to start (exit code 1, clear stderr message naming Screen Recording and pointing at `System Settings → Privacy & Security → Screen Recording`) rather than booting into a permanently-failing tick loop. Today's behavior — a daemon that endlessly logs `MockCapture has no screen frames configured` — is the worst of both worlds.
+- **B6.** This work does **not** address the scheduler-vs-store state divergence bug found alongside it: in-memory `RunningProgram.state` is never persisted, so `vcli list` always reports `pending` for everything. That fix needs its own plan because it touches the runtime crate's commit boundary, not the daemon binary. Filed in TODOS.md.
+
+### Out of scope for plan-6
+
+- Wiring real backends on non-macOS (covered by v0.4 per Decision G).
+- A `--mock-backends` CLI flag for dev / CI overrides (file as TODOS.md follow-up if needed; for now `RuntimeFactory` injection in the test crate covers all in-tree mock needs).
+- The `vcli list` state-persistence fix (separate plan; see B6).
+- Surfacing the permission report in `vcli health` JSON output (the log line in B4 is the v0 minimum; a structured field is a follow-up).
+
+### How this fits the existing decisions
+
+- Extends Decision **1.4** (SCK backend) by actually instantiating it in the binary that ships.
+- Honors Decision **B** (kill switch) — the `MockInputSink` in v0 ignored the kill switch entirely because nothing was listening; B2 fixes that.
+- Keeps the `RuntimeFactory` injection pattern from the v0 daemon plan intact — daemon unit tests still construct mocks via the factory parameter, with no behavior change.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

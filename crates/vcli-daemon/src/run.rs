@@ -37,6 +37,15 @@ pub struct RuntimeBackends {
     /// crate exposes its own `RuntimeClock` trait because Rust 1.75 lacks
     /// trait-object upcasting, so we cannot pass a `vcli_core::Clock` here.
     pub clock: Arc<dyn vcli_runtime::RuntimeClock>,
+    /// Type-erased handle for any backend resource that needs to live as
+    /// long as `RuntimeBackends` and be torn down on drop. The macOS
+    /// factory parks the kill-switch listener handle here (Decision B3);
+    /// mock factories leave this `None`. Boxing as `dyn Any + Send + Sync`
+    /// avoids exposing a cfg-gated handle type in this crate's public API.
+    // Why: public so callers can construct struct literals (no Default impl);
+    // underscore prefix suppresses dead_code on code paths that never set it.
+    #[allow(clippy::pub_underscore_fields)]
+    pub _shutdown_guard: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 /// Function that produces `RuntimeBackends` at startup. Lets tests inject
@@ -51,6 +60,12 @@ pub type RuntimeFactory = Box<dyn FnOnce() -> DaemonResult<RuntimeBackends> + Se
 pub async fn run_foreground(cfg: Config, factory: RuntimeFactory) -> DaemonResult<()> {
     ensure_dirs(&cfg)?;
     let _log_guard = crate::logging::init(&cfg.log_dir)?;
+    let report = vcli_input::permissions::probe();
+    tracing::info!(
+        accessibility = ?report.accessibility,
+        input_monitoring = ?report.input_monitoring,
+        "input permission probe"
+    );
     info!(
         data_root = %cfg.data_root.display(),
         socket = %cfg.socket.path.display(),
@@ -77,6 +92,7 @@ pub async fn run_foreground(cfg: Config, factory: RuntimeFactory) -> DaemonResul
         input,
         perception,
         clock,
+        _shutdown_guard,
     } = factory()?;
     let sched_event_tx_for_thread = sched_event_tx.clone();
     let scheduler_join = thread::Builder::new()
@@ -126,4 +142,38 @@ pub async fn run_foreground(cfg: Config, factory: RuntimeFactory) -> DaemonResul
     pid.release()?;
     info!("vcli-daemon exited cleanly");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::any::Any;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Probe that the type-erased shutdown guard runs Drop when the
+    /// `RuntimeBackends` bundle is dropped. This is the contract the macOS
+    /// factory relies on for kill-switch teardown.
+    #[test]
+    fn dropping_runtime_backends_runs_shutdown_guard_drop() {
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let guard: Box<dyn Any + Send + Sync> = Box::new(DropFlag(flag.clone()));
+
+        let backends = RuntimeBackends {
+            capture: Box::new(vcli_capture::MockCapture::empty()),
+            input: Arc::new(vcli_input::MockInputSink::new()),
+            perception: vcli_perception::Perception::default(),
+            clock: Arc::new(vcli_runtime::SystemRuntimeClock::new()),
+            _shutdown_guard: Some(guard),
+        };
+        drop(backends);
+        assert!(flag.load(Ordering::SeqCst), "guard's Drop must run");
+    }
 }

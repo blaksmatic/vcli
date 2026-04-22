@@ -54,6 +54,18 @@ pub enum DaemonError {
     /// DSL validation of a submitted program failed before scheduler touched it.
     #[error("invalid program: {0}")]
     InvalidProgram(String),
+
+    /// A backend (capture, input, perception, clock) failed to construct
+    /// at startup. The daemon refuses to boot rather than enter a
+    /// permanently-failing tick loop. See spec Decision B5.
+    #[error("{backend} backend init failed: {reason}")]
+    BackendInit {
+        /// Short backend name: "capture", "input", "perception", "clock".
+        backend: &'static str,
+        /// Human-readable cause, including remediation hint when known
+        /// (e.g., "grant Screen Recording in System Settings → Privacy & Security").
+        reason: String,
+    },
 }
 
 impl DaemonError {
@@ -68,7 +80,8 @@ impl DaemonError {
             | Self::Logging(_)
             | Self::Store(_)
             | Self::Ipc(_)
-            | Self::Io(_) => ErrorCode::Internal,
+            | Self::Io(_)
+            | Self::BackendInit { .. } => ErrorCode::Internal,
         }
     }
 }
@@ -98,5 +111,17 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("42"), "{s}");
         assert!(s.contains("/tmp/x.pid"), "{s}");
+    }
+
+    #[test]
+    fn backend_init_renders_message_and_maps_to_internal_code() {
+        let e = DaemonError::BackendInit {
+            backend: "capture",
+            reason: "Screen Recording not granted (TCC PermissionDenied)".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("capture"), "msg: {msg}");
+        assert!(msg.contains("Screen Recording"), "msg: {msg}");
+        assert_eq!(e.code(), ErrorCode::Internal);
     }
 }

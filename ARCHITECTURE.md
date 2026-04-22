@@ -23,8 +23,8 @@ vcli/
 │   ├── vcli-input/        InputSink trait + macOS CGEvent backend + kill-switch CGEventTap
 │   ├── vcli-capture/      Capture trait + macOS ScreenCaptureKit + MockCapture + Windows stub
 │   ├── vcli-perception/   Tier 1/2 evaluators + DashMap per-tick cache + PerceptionState
-│   ├── vcli-daemon/       (TBD) tick loop wiring the above
-│   └── vcli-cli/          (TBD) thin client: vcli submit/list/cancel/logs
+│   ├── vcli-daemon/       tick loop wiring the above; ships real macOS backends (plan-6)
+│   └── vcli-cli/          thin client: vcli submit/list/cancel/logs
 ├── docs/superpowers/
 │   ├── specs/             design spec (authoritative)
 │   └── plans/             per-crate implementation plans
@@ -53,7 +53,7 @@ Each crate is a clear boundary with its own error type, unit tests against mocks
                  │ handler dispatch
                  ▼
         ┌──────────────────────────────────────┐
-        │          vcli-daemon (TBD)           │
+        │             vcli-daemon              │
         │  ┌─────────────────────────────────┐ │
         │  │     10 fps tick loop            │ │
         │  │                                 │ │
