@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use vcli_capture::macos::MacCapture;
+use vcli_capture::permission::request_screen_recording_permission;
 use vcli_input::macos::{spawn_kill_switch_listener, CGEventInputSink};
 use vcli_input::KillSwitch;
 
@@ -30,6 +31,18 @@ use crate::run::RuntimeBackends;
 /// `DaemonError::BackendInit { backend: "input", .. }` if the kill-switch
 /// listener thread cannot be spawned (typically Input Monitoring is denied).
 pub fn build() -> DaemonResult<RuntimeBackends> {
+    // Trigger the macOS Screen Recording prompt the first time an
+    // unprivileged binary attempts to construct MacCapture. Without this,
+    // CGPreflightScreenCaptureAccess (used inside MacCapture::new) returns
+    // false silently — the daemon fails clean per Decision B5 but the user
+    // never sees a system dialog and has to manually add the binary in
+    // System Settings → Privacy & Security → Screen Recording. Calling
+    // CGRequestScreenCaptureAccess here is async from the user's
+    // perspective: the dialog opens, but MacCapture::new below will still
+    // observe Denied on this run. Restart picks up the granted state.
+    // Ignore the result — request can't fail in any actionable way.
+    let _ = request_screen_recording_permission();
+
     let capture = MacCapture::new().map_err(|e| DaemonError::BackendInit {
         backend: "capture",
         reason: format!(
