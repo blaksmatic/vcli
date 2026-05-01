@@ -33,6 +33,8 @@ pub mod bridge;
 
 pub use bridge::{new_channels, CommandChannel, SchedulerCommand, EVENT_BROADCAST_CAPACITY};
 
+pub mod assets;
+
 pub mod persist;
 
 pub use persist::{program_id_of, spawn_event_pump};

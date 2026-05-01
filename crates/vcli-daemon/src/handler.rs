@@ -3,6 +3,7 @@
 //! an `Arc<Mutex<Store>>` (sync — reached via `spawn_blocking` when we need to
 //! call `SQLite` from inside an async method).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -42,8 +43,13 @@ impl DaemonHandler {
         }
     }
 
-    async fn handle_submit(&self, id: RequestId, program_json: serde_json::Value) -> Response {
-        let program = match vcli_dsl::validate_value(&program_json) {
+    async fn handle_submit(
+        &self,
+        id: RequestId,
+        program_json: serde_json::Value,
+        base_dir: Option<String>,
+    ) -> Response {
+        let mut program = match vcli_dsl::validate_value(&program_json) {
             Ok(v) => v.program,
             Err(e) => {
                 return Response::err(id, e.to_payload());
@@ -52,36 +58,47 @@ impl DaemonHandler {
 
         let program_id = program.id.unwrap_or_else(ProgramId::new);
         let name = program.name.clone();
-        let canonical_bytes = match vcli_core::canonicalize(&program_json) {
-            Ok(b) => b,
-            Err(e) => {
-                return Response::err(
-                    id,
-                    ErrorPayload::simple(ErrorCode::Internal, format!("canonicalize: {e}")),
-                );
-            }
-        };
-        let canonical = String::from_utf8(canonical_bytes)
-            .expect("canonicalize produces UTF-8 by construction");
 
         let store = self.store.clone();
         let pid = program_id;
         let submitted_at = vcli_core::clock::now_unix_ms();
         let name_for_insert = name.clone();
-        let canonical_str = canonical.clone();
-        let insert_result = tokio::task::spawn_blocking(move || {
+        let base_dir = base_dir.map(PathBuf::from);
+        let submit_result = tokio::task::spawn_blocking(move || {
             let mut s = store.lock().unwrap();
+            let materialized = crate::assets::materialize_template_assets(
+                &mut s,
+                pid,
+                &mut program,
+                base_dir.as_deref(),
+                submitted_at,
+            )
+            .map_err(|e| e.to_payload())?;
+            let rewritten_json = serde_json::to_value(&program).map_err(|e| {
+                ErrorPayload::simple(ErrorCode::Internal, format!("serialize program: {e}"))
+            })?;
+            let canonical_bytes = vcli_core::canonicalize(&rewritten_json).map_err(|e| {
+                ErrorPayload::simple(ErrorCode::Internal, format!("canonicalize: {e}"))
+            })?;
+            let canonical = String::from_utf8(canonical_bytes)
+                .expect("canonicalize produces UTF-8 by construction");
             s.insert_program(&vcli_store::NewProgram {
                 id: pid,
                 name: &name_for_insert,
-                source_json: &canonical_str,
+                source_json: &canonical,
                 state: vcli_core::ProgramState::Pending,
                 submitted_at,
                 labels_json: "{}",
             })
+            .map_err(|e| ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))?;
+            for hash in &materialized.hashes {
+                s.link_program_asset(pid, hash)
+                    .map_err(|e| ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))?;
+            }
+            Ok::<_, ErrorPayload>(program)
         })
         .await;
-        let insert = match insert_result {
+        let program = match submit_result {
             Ok(v) => v,
             Err(e) => {
                 error!(error = %e, "submit join error");
@@ -91,12 +108,10 @@ impl DaemonHandler {
                 );
             }
         };
-        if let Err(e) = insert {
-            return Response::err(
-                id,
-                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
-            );
-        }
+        let program = match program {
+            Ok(program) => program,
+            Err(payload) => return Response::err(id, payload),
+        };
 
         if let Err(e) = self.bridge.cmd_tx.send(SchedulerCommand::SubmitValidated {
             program_id: pid,
@@ -380,10 +395,9 @@ impl Handler for DaemonHandler {
         let resp = match op {
             RequestOp::Health => self.handle_health(id),
             RequestOp::Shutdown => self.handle_shutdown(id),
-            RequestOp::Submit {
-                program,
-                base_dir: _,
-            } => self.handle_submit(id, program).await,
+            RequestOp::Submit { program, base_dir } => {
+                self.handle_submit(id, program, base_dir).await
+            }
             RequestOp::List { state } => self.handle_list(id, state).await,
             RequestOp::Status { program_id } => self.handle_status(id, program_id).await,
             RequestOp::Cancel { program_id } => self.handle_cancel(id, program_id),
@@ -784,6 +798,67 @@ mod tests {
         assert_eq!(row.name, "noop");
         match f.cmd_rx.try_recv().unwrap() {
             SchedulerCommand::SubmitValidated { program_id, .. } => assert_eq!(program_id, pid),
+            other => panic!("wrong cmd: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_rewrites_and_links_template_assets() {
+        let f = fresh_handler();
+        let asset_dir = f.dir.path().join("program-assets");
+        std::fs::create_dir(&asset_dir).unwrap();
+        std::fs::write(asset_dir.join("skip.png"), b"PNG-BYTES").unwrap();
+        let program = serde_json::json!({
+            "version": "0.1",
+            "name": "template",
+            "trigger": { "kind": "on_submit" },
+            "predicates": {
+                "skip": {
+                    "kind": "template",
+                    "image": "skip.png",
+                    "confidence": 0.9,
+                    "region": {
+                        "kind": "absolute",
+                        "box": { "x": 0, "y": 0, "w": 10, "h": 10 }
+                    }
+                }
+            },
+            "watches": [],
+            "body": [],
+        });
+
+        let resp = f
+            .handler
+            .handle(
+                RequestId::new(),
+                RequestOp::Submit {
+                    program,
+                    base_dir: Some(asset_dir.display().to_string()),
+                },
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        let pid: ProgramId = body["result"]["program_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let store = f.handler.store.lock().unwrap();
+        let row = store.get_program(pid).unwrap();
+        assert!(row.source_json.contains("sha256:"), "{}", row.source_json);
+        assert!(!row.source_json.contains("skip.png"), "{}", row.source_json);
+        let linked = store.referenced_asset_hashes().unwrap();
+        assert_eq!(linked.len(), 1);
+        drop(store);
+
+        match f.cmd_rx.recv().unwrap() {
+            SchedulerCommand::SubmitValidated { program, .. } => {
+                let v = serde_json::to_value(program.predicates["skip"].clone()).unwrap();
+                assert!(v["image"].as_str().unwrap().starts_with("sha256:"), "{v}");
+            }
             other => panic!("wrong cmd: {other:?}"),
         }
     }
