@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::Receiver;
 use tokio::sync::broadcast;
 use tracing::{error, trace};
-use vcli_core::{Event, EventData, ProgramId};
+use vcli_core::{Event, EventData, ProgramId, ProgramState};
 use vcli_store::Store;
 
 /// Drain `event_rx` on a background tokio task. Returns a `JoinHandle` so the
@@ -30,14 +30,58 @@ pub fn spawn_event_pump(
         while let Ok(ev) = event_rx.recv() {
             if let Some(pid) = program_id_of(&ev.data) {
                 let mut guard = store.lock().expect("store mutex poisoned");
-                if let Err(e) = guard.append_event(pid, &ev) {
-                    error!(error = %e, "failed to append event");
-                }
+                persist_program_event(&mut guard, pid, &ev);
             }
             let _ = broadcast_tx.send(ev);
             trace!("event pump iteration");
         }
     })
+}
+
+fn persist_program_event(store: &mut Store, pid: ProgramId, ev: &Event) {
+    if let Err(e) = store.append_event(pid, ev) {
+        error!(error = %e, "failed to append event");
+    }
+
+    match &ev.data {
+        EventData::ProgramStateChanged { to, .. } => {
+            if let Err(e) = store.update_state(pid, *to, ev.at) {
+                error!(error = %e, "failed to update program state");
+            }
+        }
+        EventData::ProgramCompleted { .. } => {
+            if let Err(e) = store.update_state(pid, ProgramState::Completed, ev.at) {
+                error!(error = %e, "failed to mark program completed");
+            }
+        }
+        EventData::ProgramFailed { reason, step, .. } => {
+            if let Err(e) = store.update_state(pid, ProgramState::Failed, ev.at) {
+                error!(error = %e, "failed to mark program failed");
+            }
+            let msg = step.as_deref().unwrap_or(reason);
+            if let Err(e) = store.set_last_error(pid, reason, msg) {
+                error!(error = %e, "failed to persist last error");
+            }
+        }
+        EventData::ProgramResumed { from_step, .. } => {
+            if let Err(e) = store.update_state(pid, ProgramState::Running, ev.at) {
+                error!(error = %e, "failed to mark program resumed");
+            }
+            if let Err(e) = store.set_body_cursor(pid, *from_step) {
+                error!(error = %e, "failed to persist resume cursor");
+            }
+        }
+        EventData::ProgramSubmitted { .. }
+        | EventData::WatchFired { .. }
+        | EventData::ActionDispatched { .. }
+        | EventData::ActionDeferred { .. }
+        | EventData::DaemonStarted { .. }
+        | EventData::DaemonStopped
+        | EventData::DaemonPressure { .. }
+        | EventData::StreamDropped { .. }
+        | EventData::TickFrameSkipped { .. }
+        | EventData::CapturePermissionMissing { .. } => {}
+    }
 }
 
 /// Extract the program id from an event payload, if any. Returns `None` for
@@ -127,5 +171,87 @@ mod tests {
             reason: "trigger".into(),
         };
         assert_eq!(program_id_of(&d), Some(p));
+    }
+
+    #[tokio::test]
+    async fn event_pump_persists_state_changed_before_broadcast() {
+        let d = tempdir().unwrap();
+        let (mut store, _) = Store::open(d.path()).unwrap();
+        let pid = ProgramId::new();
+        store
+            .insert_program(&NewProgram {
+                id: pid,
+                name: "x",
+                source_json: "{}",
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let (sched_tx, sched_rx) = unbounded::<Event>();
+        let (bcast_tx, mut bcast_rx) = broadcast::channel::<Event>(16);
+        let pump = spawn_event_pump(store.clone(), sched_rx, bcast_tx);
+
+        sched_tx
+            .send(Event {
+                at: 11,
+                data: EventData::ProgramStateChanged {
+                    program_id: pid,
+                    from: vcli_core::ProgramState::Pending,
+                    to: vcli_core::ProgramState::Waiting,
+                    reason: "submitted".into(),
+                },
+            })
+            .unwrap();
+        let _ = bcast_rx.recv().await.unwrap();
+
+        let row = store.lock().unwrap().get_program(pid).unwrap();
+        assert_eq!(row.state, vcli_core::ProgramState::Waiting);
+
+        drop(sched_tx);
+        pump.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn event_pump_persists_failed_state_and_last_error_before_broadcast() {
+        let d = tempdir().unwrap();
+        let (mut store, _) = Store::open(d.path()).unwrap();
+        let pid = ProgramId::new();
+        store
+            .insert_program(&NewProgram {
+                id: pid,
+                name: "x",
+                source_json: "{}",
+                state: vcli_core::ProgramState::Running,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let (sched_tx, sched_rx) = unbounded::<Event>();
+        let (bcast_tx, mut bcast_rx) = broadcast::channel::<Event>(16);
+        let pump = spawn_event_pump(store.clone(), sched_rx, bcast_tx);
+
+        sched_tx
+            .send(Event {
+                at: 12,
+                data: EventData::ProgramFailed {
+                    program_id: pid,
+                    reason: "assert_failed".into(),
+                    step: Some("body[0]".into()),
+                    emit: None,
+                },
+            })
+            .unwrap();
+        let _ = bcast_rx.recv().await.unwrap();
+
+        let row = store.lock().unwrap().get_program(pid).unwrap();
+        assert_eq!(row.state, vcli_core::ProgramState::Failed);
+        assert_eq!(row.last_error_code.as_deref(), Some("assert_failed"));
+        assert_eq!(row.last_error_msg.as_deref(), Some("body[0]"));
+
+        drop(sched_tx);
+        pump.await.unwrap();
     }
 }
