@@ -33,6 +33,7 @@ async fn submit_returns_ok_with_program_id() {
     let resp = client
         .request(RequestOp::Submit {
             program: serde_json::json!({ "version": "0.1", "name": "x" }),
+            base_dir: None,
         })
         .await
         .unwrap();

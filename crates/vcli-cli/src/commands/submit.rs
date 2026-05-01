@@ -38,9 +38,14 @@ pub async fn run<W: Write>(
     if let Err(e) = validate_value(&program) {
         return Err(CliError::Validation(format_dsl_error(&e)));
     }
+    let base_dir = std::fs::canonicalize(&args.file)
+        .ok()
+        .and_then(|p| p.parent().map(|parent| parent.display().to_string()));
 
     let mut client = connect(socket).await?;
-    let resp = client.request(RequestOp::Submit { program }).await?;
+    let resp = client
+        .request(RequestOp::Submit { program, base_dir })
+        .await?;
     let program_id = match resp.body {
         ResponseBody::Ok { result, .. } => {
             let id = extract_program_id(&result)?;

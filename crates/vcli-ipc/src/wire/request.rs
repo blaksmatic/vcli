@@ -67,6 +67,12 @@ pub enum RequestOp {
     Submit {
         /// Program document as JSON (daemon validates via `vcli-dsl`).
         program: serde_json::Value,
+        /// Optional directory used by the daemon to resolve relative asset
+        /// paths in the program document. CLI submit sets this to the program
+        /// file's parent directory; API clients may omit it when using
+        /// absolute paths or already-materialized `sha256:<hex>` refs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_dir: Option<String>,
     },
     /// List programs, optionally filtered by state.
     List {
@@ -138,12 +144,30 @@ mod tests {
             id: RequestId::new(),
             op: RequestOp::Submit {
                 program: serde_json::json!({ "version": "0.1", "name": "x" }),
+                base_dir: Some("/tmp/vcli-assets".into()),
             },
         };
         let j = serde_json::to_string(&req).unwrap();
         assert!(j.contains(r#""op":"submit""#), "{j}");
+        assert!(j.contains(r#""base_dir":"/tmp/vcli-assets""#), "{j}");
         let back: Request = serde_json::from_str(&j).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn submit_base_dir_defaults_to_none() {
+        let raw = serde_json::json!({
+            "id": RequestId::new(),
+            "op": "submit",
+            "params": {
+                "program": { "version": "0.1", "name": "x" }
+            }
+        });
+        let back: Request = serde_json::from_value(raw).unwrap();
+        match back.op {
+            RequestOp::Submit { base_dir, .. } => assert!(base_dir.is_none()),
+            other => panic!("wrong op: {other:?}"),
+        }
     }
 
     #[test]

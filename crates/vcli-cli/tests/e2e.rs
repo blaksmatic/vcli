@@ -162,6 +162,49 @@ async fn submit_command_writes_program_id() {
 }
 
 #[tokio::test]
+async fn submit_command_sends_file_parent_as_base_dir() {
+    let d = FakeDaemon::start().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("p.json");
+    std::fs::write(
+        &file,
+        r#"{
+            "version": "0.1",
+            "name": "t",
+            "trigger": {"kind":"on_submit"},
+            "predicates": {},
+            "watches": [],
+            "body": []
+        }"#,
+    )
+    .unwrap();
+    let mut buf: Vec<u8> = Vec::new();
+    commands::submit::run(
+        &d.socket,
+        OutputMode::Pretty,
+        &SubmitArgs {
+            file: file.clone(),
+            watch: false,
+        },
+        &mut buf,
+    )
+    .await
+    .unwrap();
+
+    let seen = d.handler.received.lock().await;
+    let Some(vcli_ipc::RequestOp::Submit { base_dir, .. }) = seen.last() else {
+        panic!("expected submit op, got {seen:?}");
+    };
+    let expected = std::fs::canonicalize(&file)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(base_dir.as_deref(), Some(expected.as_str()));
+}
+
+#[tokio::test]
 async fn submit_with_invalid_json_file_is_validation_error() {
     let d = FakeDaemon::start().await;
     let tmp = tempfile::tempdir().unwrap();

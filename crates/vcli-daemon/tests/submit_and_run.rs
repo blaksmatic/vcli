@@ -54,7 +54,13 @@ async fn submit_creates_program_row_and_returns_id() {
         "watches": [],
         "body": [],
     });
-    let resp = client.request(RequestOp::Submit { program }).await.unwrap();
+    let resp = client
+        .request(RequestOp::Submit {
+            program,
+            base_dir: None,
+        })
+        .await
+        .unwrap();
     match resp.body {
         ResponseBody::Ok { result, .. } => {
             let pid = result["program_id"].as_str().unwrap();

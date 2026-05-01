@@ -380,7 +380,10 @@ impl Handler for DaemonHandler {
         let resp = match op {
             RequestOp::Health => self.handle_health(id),
             RequestOp::Shutdown => self.handle_shutdown(id),
-            RequestOp::Submit { program } => self.handle_submit(id, program).await,
+            RequestOp::Submit {
+                program,
+                base_dir: _,
+            } => self.handle_submit(id, program).await,
             RequestOp::List { state } => self.handle_list(id, state).await,
             RequestOp::Status { program_id } => self.handle_status(id, program_id).await,
             RequestOp::Cancel { program_id } => self.handle_cancel(id, program_id),
@@ -765,6 +768,7 @@ mod tests {
                 id,
                 RequestOp::Submit {
                     program: program.clone(),
+                    base_dir: None,
                 },
             )
             .await
