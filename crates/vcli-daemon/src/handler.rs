@@ -304,7 +304,7 @@ impl DaemonHandler {
                     .into_iter()
                     .map(|r| {
                         serde_json::json!({
-                            "id": r.id.to_string(),
+                            "program_id": r.id.to_string(),
                             "name": r.name,
                             "state": r.state.as_str(),
                             "submitted_at": r.submitted_at,
@@ -672,8 +672,10 @@ mod tests {
     #[tokio::test]
     async fn list_returns_all_programs_when_no_filter() {
         let f = fresh_handler();
+        let mut ids = Vec::new();
         for name in ["a", "b"] {
             let id = ProgramId::new();
+            ids.push(id);
             f.handler
                 .store
                 .lock()
@@ -696,6 +698,8 @@ mod tests {
         let body = serde_json::to_value(&resp).unwrap();
         let items = body["result"]["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["program_id"], ids[0].to_string());
+        assert!(items[0].get("id").is_none());
     }
 
     #[tokio::test]
