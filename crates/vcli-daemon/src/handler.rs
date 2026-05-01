@@ -95,10 +95,10 @@ impl DaemonHandler {
                 s.link_program_asset(pid, hash)
                     .map_err(|e| ErrorPayload::simple(ErrorCode::Internal, format!("{e}")))?;
             }
-            Ok::<_, ErrorPayload>(program)
+            Ok::<_, ErrorPayload>((program, materialized.bytes))
         })
         .await;
-        let program = match submit_result {
+        let submit_result = match submit_result {
             Ok(v) => v,
             Err(e) => {
                 error!(error = %e, "submit join error");
@@ -108,14 +108,15 @@ impl DaemonHandler {
                 );
             }
         };
-        let program = match program {
-            Ok(program) => program,
+        let (program, assets) = match submit_result {
+            Ok(v) => v,
             Err(payload) => return Response::err(id, payload),
         };
 
         if let Err(e) = self.bridge.cmd_tx.send(SchedulerCommand::SubmitValidated {
             program_id: pid,
             program,
+            assets,
         }) {
             error!(error = %e, "cmd_tx full");
             return Response::err(
@@ -229,42 +230,37 @@ impl DaemonHandler {
         let now_ms = vcli_core::clock::now_unix_ms();
         let resume_result = tokio::task::spawn_blocking(move || {
             let mut s = store.lock().unwrap();
-            let outcome = s.resume_program(pid, from_start, now_ms)?;
-            let row = s.get_program(pid)?;
-            let value: serde_json::Value = serde_json::from_str(&row.source_json)?;
-            let program = vcli_dsl::validate_value(&value)
+            let outcome = s
+                .resume_program(pid, from_start, now_ms)
+                .map_err(store_error_payload)?;
+            let row = s.get_program(pid).map_err(store_error_payload)?;
+            let value: serde_json::Value = serde_json::from_str(&row.source_json).map_err(|e| {
+                ErrorPayload::simple(ErrorCode::Internal, format!("stored program json: {e}"))
+            })?;
+            let mut program = vcli_dsl::validate_value(&value)
                 .map(|v| v.program)
-                .map_err(|e| vcli_store::StoreError::Io {
-                    path: "<dsl>".into(),
-                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}")),
-                })?;
-            Ok::<_, vcli_store::StoreError>((outcome, program))
+                .map_err(|e| e.to_payload())?;
+            let materialized =
+                crate::assets::materialize_template_assets(&mut s, pid, &mut program, None, now_ms)
+                    .map_err(|e| e.to_payload())?;
+            Ok::<_, ErrorPayload>((outcome, program, materialized.bytes))
         })
         .await;
 
         match resume_result {
-            Ok(Ok((out, program))) => {
+            Ok(Ok((out, program, assets))) => {
                 let _ = self.bridge.cmd_tx.send(SchedulerCommand::ResumeRunning {
                     program_id: pid,
                     from_step: out.from_step,
                     program,
+                    assets,
                 });
                 Response::ok(
                     id,
                     serde_json::json!({ "program_id": pid.to_string(), "from_step": out.from_step }),
                 )
             }
-            Ok(Err(vcli_store::StoreError::NotResumable(m))) => {
-                Response::err(id, ErrorPayload::simple(ErrorCode::NotResumable, m))
-            }
-            Ok(Err(vcli_store::StoreError::UnknownProgram(_))) => Response::err(
-                id,
-                ErrorPayload::simple(ErrorCode::UnknownProgram, "not found"),
-            ),
-            Ok(Err(e)) => Response::err(
-                id,
-                ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
-            ),
+            Ok(Err(payload)) => Response::err(id, payload),
             Err(e) => Response::err(
                 id,
                 ErrorPayload::simple(ErrorCode::Internal, format!("{e}")),
@@ -386,6 +382,16 @@ impl DaemonHandler {
         self.trigger_shutdown();
         let _ = self.bridge.cmd_tx.send(SchedulerCommand::Shutdown);
         Response::ok(id, serde_json::json!({ "bye": true }))
+    }
+}
+
+fn store_error_payload(e: vcli_store::StoreError) -> ErrorPayload {
+    match e {
+        vcli_store::StoreError::NotResumable(m) => ErrorPayload::simple(ErrorCode::NotResumable, m),
+        vcli_store::StoreError::UnknownProgram(_) => {
+            ErrorPayload::simple(ErrorCode::UnknownProgram, "not found")
+        }
+        other => ErrorPayload::simple(ErrorCode::Internal, format!("{other}")),
     }
 }
 
@@ -568,6 +574,28 @@ mod tests {
         .to_string()
     }
 
+    fn template_program_json(hash: &str) -> String {
+        serde_json::json!({
+            "version": "0.1",
+            "name": "r",
+            "trigger": { "kind": "on_submit" },
+            "predicates": {
+                "skip": {
+                    "kind": "template",
+                    "image": format!("sha256:{hash}"),
+                    "confidence": 0.9,
+                    "region": {
+                        "kind": "absolute",
+                        "box": { "x": 0, "y": 0, "w": 10, "h": 10 }
+                    }
+                }
+            },
+            "watches": [],
+            "body": [],
+        })
+        .to_string()
+    }
+
     #[tokio::test]
     async fn resume_transitions_store_and_sends_command() {
         let f = fresh_handler();
@@ -614,6 +642,60 @@ mod tests {
             } => {
                 assert_eq!(program_id, pid);
                 assert_eq!(from_step, 3);
+            }
+            other => panic!("wrong cmd: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_loads_template_assets_for_scheduler() {
+        let f = fresh_handler();
+        let pid = ProgramId::new();
+        let path = f.dir.path().to_path_buf();
+        let hash = {
+            let mut s = f.handler.store.lock().unwrap();
+            let stored = s.put_asset(b"PNG-BYTES", Some("png"), 0).unwrap();
+            let hash = stored.hash.hex().to_string();
+            let src = template_program_json(&hash);
+            s.insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "r",
+                source_json: &src,
+                state: vcli_core::ProgramState::Pending,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+            s.update_state(pid, vcli_core::ProgramState::Running, 1)
+                .unwrap();
+            s.set_body_cursor(pid, 2).unwrap();
+            hash
+        };
+        let (_, _) = vcli_store::Store::open(&path).unwrap();
+
+        let resp = f
+            .handler
+            .handle(
+                RequestId::new(),
+                RequestOp::Resume {
+                    program_id: pid,
+                    from_start: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::to_value(&resp).unwrap();
+        assert_eq!(body["ok"], true);
+        match f.cmd_rx.try_recv().unwrap() {
+            SchedulerCommand::ResumeRunning {
+                program_id, assets, ..
+            } => {
+                assert_eq!(program_id, pid);
+                assert_eq!(
+                    assets.get(&hash).map(Vec::as_slice),
+                    Some(&b"PNG-BYTES"[..])
+                );
             }
             other => panic!("wrong cmd: {other:?}"),
         }
@@ -855,9 +937,14 @@ mod tests {
         drop(store);
 
         match f.cmd_rx.recv().unwrap() {
-            SchedulerCommand::SubmitValidated { program, .. } => {
+            SchedulerCommand::SubmitValidated {
+                program, assets, ..
+            } => {
                 let v = serde_json::to_value(program.predicates["skip"].clone()).unwrap();
-                assert!(v["image"].as_str().unwrap().starts_with("sha256:"), "{v}");
+                let image = v["image"].as_str().unwrap();
+                assert!(image.starts_with("sha256:"), "{v}");
+                let hash = image.strip_prefix("sha256:").unwrap();
+                assert_eq!(assets.get(hash).map(Vec::as_slice), Some(&b"PNG-BYTES"[..]));
             }
             other => panic!("wrong cmd: {other:?}"),
         }

@@ -75,6 +75,7 @@ fn click_then_wait_for_new_state_succeeds() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

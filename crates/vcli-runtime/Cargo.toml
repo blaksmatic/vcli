@@ -21,6 +21,7 @@ serde_json        = { workspace = true }
 
 [dev-dependencies]
 vcli-dsl          = { path = "../vcli-dsl" }
+image             = { workspace = true }
 proptest          = { workspace = true }
 tempfile          = { workspace = true }
 
@@ -75,3 +76,7 @@ path = "tests/scenarios/elapsed_ms_since_true.rs"
 [[test]]
 name = "daemon_restart_marker"
 path = "tests/scenarios/daemon_restart_marker.rs"
+
+[[test]]
+name = "template_asset_runtime"
+path = "tests/scenarios/template_asset_runtime.rs"

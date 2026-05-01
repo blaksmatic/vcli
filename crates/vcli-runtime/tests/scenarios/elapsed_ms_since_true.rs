@@ -80,6 +80,7 @@ fn elapsed_ms_since_true_fires_after_delay() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

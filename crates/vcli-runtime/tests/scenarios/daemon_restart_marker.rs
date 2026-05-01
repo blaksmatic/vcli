@@ -57,6 +57,7 @@ fn resume_running_starts_body_at_cursor_and_emits_resumed() {
             program_id: id,
             from_step: 2,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

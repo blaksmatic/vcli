@@ -68,6 +68,7 @@ fn watch_timeout_retires_after_budget() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

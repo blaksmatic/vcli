@@ -67,6 +67,7 @@ fn wait_for_fails_on_timeout_when_on_timeout_fail() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

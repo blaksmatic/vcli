@@ -74,6 +74,7 @@ fn wait_for_postcondition_fails_when_never_truthy() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

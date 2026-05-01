@@ -2,6 +2,8 @@
 //! synchronous scheduler thread. Shape is pinned by spec §Threading model and
 //! by the sibling vcli-daemon plan.
 
+use std::collections::BTreeMap;
+
 use vcli_core::{Program, ProgramId};
 
 /// Commands consumed on every tick before evaluation.
@@ -15,6 +17,8 @@ pub enum SchedulerCommand {
         program_id: ProgramId,
         /// Parsed program.
         program: Program,
+        /// Template and other binary assets keyed by raw content hash.
+        assets: BTreeMap<String, Vec<u8>>,
     },
     /// Terminate a program with `Cancelled`.
     Cancel {
@@ -37,6 +41,8 @@ pub enum SchedulerCommand {
         from_step: u32,
         /// Full program (daemon reloaded it from `SQLite`).
         program: Program,
+        /// Template and other binary assets keyed by raw content hash.
+        assets: BTreeMap<String, Vec<u8>>,
     },
     /// Drain and exit `run_until_shutdown`.
     Shutdown,
@@ -71,6 +77,7 @@ mod tests {
         let c = SchedulerCommand::SubmitValidated {
             program_id: id,
             program: sample_program(),
+            assets: BTreeMap::new(),
         };
         match c {
             SchedulerCommand::SubmitValidated { program_id, .. } => assert_eq!(program_id, id),

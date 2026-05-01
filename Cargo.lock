@@ -2511,6 +2511,7 @@ name = "vcli-runtime"
 version = "0.0.1"
 dependencies = [
  "crossbeam-channel",
+ "image",
  "proptest",
  "serde_json",
  "tempfile",

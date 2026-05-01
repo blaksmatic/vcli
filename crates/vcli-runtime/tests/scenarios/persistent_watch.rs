@@ -80,6 +80,7 @@ fn persistent_watch_fires_on_each_edge() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let handle = std::thread::spawn(move || sched.run_until_shutdown());

@@ -1,6 +1,6 @@
 //! `RunningProgram` — the scheduler's in-memory view of a submitted program.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use vcli_core::state::ProgramState;
 use vcli_core::{Program, UnixMs};
@@ -10,6 +10,8 @@ use vcli_core::{Program, UnixMs};
 pub struct RunningProgram {
     /// Parsed program.
     pub program: Program,
+    /// Binary assets keyed by raw content hash for `sha256:<hash>` predicate refs.
+    pub assets: BTreeMap<String, Vec<u8>>,
     /// Current lifecycle state.
     pub state: ProgramState,
     /// Wall-clock ms when the program entered `Running` (for `timeout_ms` + `Lifetime::TimeoutMs`).
@@ -43,12 +45,22 @@ impl RunningProgram {
     pub fn pending(program: Program) -> Self {
         Self {
             program,
+            assets: BTreeMap::new(),
             state: ProgramState::Pending,
             running_since_ms: None,
             body_cursor: None,
             watch_state: HashMap::new(),
             resumed_from: None,
             body_state: crate::body::BodyState::default(),
+        }
+    }
+
+    /// Construct at `Pending` with daemon-supplied asset bytes.
+    #[must_use]
+    pub fn pending_with_assets(program: Program, assets: BTreeMap<String, Vec<u8>>) -> Self {
+        Self {
+            assets,
+            ..Self::pending(program)
         }
     }
 

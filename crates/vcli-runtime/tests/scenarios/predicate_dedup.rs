@@ -73,12 +73,14 @@ fn two_programs_same_predicate_both_fire() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id1,
             program: build_program("p1", 1),
+            assets: BTreeMap::new(),
         })
         .unwrap();
     cmd_tx
         .send(SchedulerCommand::SubmitValidated {
             program_id: id2,
             program: build_program("p2", 2),
+            assets: BTreeMap::new(),
         })
         .unwrap();
     let h = std::thread::spawn(move || sched.run_until_shutdown());

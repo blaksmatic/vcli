@@ -62,23 +62,40 @@ pub fn reload_waiting_programs(
     store: &Arc<Mutex<Store>>,
     cmd_tx: &crossbeam_channel::Sender<crate::bridge::SchedulerCommand>,
 ) -> usize {
-    let rows = {
-        let s = store.lock().unwrap();
-        s.list_programs(Some(ProgramState::Waiting))
-            .unwrap_or_default()
+    let now_ms = vcli_core::clock::now_unix_ms();
+    let reloaded = {
+        let mut s = store.lock().unwrap();
+        let rows = s
+            .list_programs(Some(ProgramState::Waiting))
+            .unwrap_or_default();
+        rows.into_iter()
+            .filter_map(|row| {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.source_json) else {
+                    return None;
+                };
+                let Ok(mut program) = vcli_dsl::validate_value(&value).map(|v| v.program) else {
+                    return None;
+                };
+                let Ok(materialized) = crate::assets::materialize_template_assets(
+                    &mut s,
+                    row.id,
+                    &mut program,
+                    None,
+                    now_ms,
+                ) else {
+                    return None;
+                };
+                Some((row.id, program, materialized.bytes))
+            })
+            .collect::<Vec<_>>()
     };
     let mut sent = 0;
-    for row in &rows {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.source_json) else {
-            continue;
-        };
-        let Ok(program) = vcli_dsl::validate_value(&value).map(|v| v.program) else {
-            continue;
-        };
+    for (program_id, program, assets) in reloaded {
         if cmd_tx
             .send(crate::bridge::SchedulerCommand::SubmitValidated {
-                program_id: row.id,
+                program_id,
                 program,
+                assets,
             })
             .is_ok()
         {
@@ -127,5 +144,61 @@ mod tests {
         let (cmd_tx, _cmd_rx) = unbounded::<crate::bridge::SchedulerCommand>();
         let n = reload_waiting_programs(&store, &cmd_tx);
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn reload_waiting_sends_template_assets() {
+        let d = tempdir().unwrap();
+        let (mut store, _) = Store::open(d.path()).unwrap();
+        let pid = vcli_core::ProgramId::new();
+        let stored = store.put_asset(b"PNG-BYTES", Some("png"), 0).unwrap();
+        let hash = stored.hash.hex().to_string();
+        let source_json = serde_json::json!({
+            "version": "0.1",
+            "name": "waiting-template",
+            "trigger": { "kind": "on_submit" },
+            "predicates": {
+                "skip": {
+                    "kind": "template",
+                    "image": format!("sha256:{hash}"),
+                    "confidence": 0.9,
+                    "region": {
+                        "kind": "absolute",
+                        "box": { "x": 0, "y": 0, "w": 10, "h": 10 }
+                    }
+                }
+            },
+            "watches": [],
+            "body": [],
+        })
+        .to_string();
+        store
+            .insert_program(&vcli_store::NewProgram {
+                id: pid,
+                name: "waiting-template",
+                source_json: &source_json,
+                state: ProgramState::Waiting,
+                submitted_at: 0,
+                labels_json: "{}",
+            })
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let (cmd_tx, cmd_rx) = unbounded::<crate::bridge::SchedulerCommand>();
+
+        let n = reload_waiting_programs(&store, &cmd_tx);
+
+        assert_eq!(n, 1);
+        match cmd_rx.recv().unwrap() {
+            crate::bridge::SchedulerCommand::SubmitValidated {
+                program_id, assets, ..
+            } => {
+                assert_eq!(program_id, pid);
+                assert_eq!(
+                    assets.get(&hash).map(Vec::as_slice),
+                    Some(&b"PNG-BYTES"[..])
+                );
+            }
+            other => panic!("wrong cmd: {other:?}"),
+        }
     }
 }

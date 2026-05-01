@@ -115,8 +115,9 @@ impl Scheduler {
                 SchedulerCommand::SubmitValidated {
                     program_id,
                     program,
+                    assets,
                 } => {
-                    let mut rp = RunningProgram::pending(program);
+                    let mut rp = RunningProgram::pending_with_assets(program, assets);
                     rp.state = ProgramState::Waiting;
                     self.event.emit(EventData::ProgramSubmitted {
                         program_id,
@@ -159,8 +160,9 @@ impl Scheduler {
                     program_id,
                     from_step,
                     program,
+                    assets,
                 } => {
-                    let mut rp = RunningProgram::pending(program);
+                    let mut rp = RunningProgram::pending_with_assets(program, assets);
                     rp.state = ProgramState::Running;
                     rp.running_since_ms = Some(self.clock.unix_ms());
                     rp.body_cursor = Some(from_step);
@@ -196,7 +198,6 @@ impl Scheduler {
         };
         self.perception.clear();
         let now_ms = self.clock.unix_ms();
-        let assets: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
 
         let waiting: Vec<ProgramId> = self
             .programs
@@ -212,7 +213,7 @@ impl Scheduler {
                     &p.program.predicates,
                     &frame,
                     now_ms,
-                    &assets,
+                    &p.assets,
                     &self.perception,
                     id,
                 )
@@ -282,7 +283,7 @@ impl Scheduler {
                         &rp.program.predicates,
                         &frame,
                         now_ms,
-                        &assets,
+                        &rp.assets,
                         Some(id),
                     ) {
                         Ok(r) if r.truthy => {
@@ -299,7 +300,7 @@ impl Scheduler {
                         &rp.program.predicates,
                         &frame,
                         now_ms,
-                        &assets,
+                        &rp.assets,
                         Some(id),
                     ) {
                         Ok(r) => r.truthy,
@@ -317,7 +318,7 @@ impl Scheduler {
                             &tmp,
                             &frame,
                             now_ms,
-                            &assets,
+                            &rp.assets,
                             Some(id),
                         ) {
                             Ok(r) => r.truthy,
@@ -375,27 +376,29 @@ impl Scheduler {
             let prog_id = d.program_id;
             let (watch_idx, steps, one_shot) = d.payload;
             if d.dispatch {
-                let preds = self.programs[&prog_id].program.predicates.clone();
                 let mut err: Option<crate::error::RuntimeError> = None;
-                for s in &steps {
-                    let value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
-                    self.event.emit(EventData::ActionDispatched {
-                        program_id: prog_id,
-                        step: value,
-                        target: None,
-                    });
-                    if let Err(e) = crate::body::dispatch_action(
-                        s,
-                        &preds,
-                        &frame,
-                        now_ms,
-                        &assets,
-                        &self.perception,
-                        prog_id,
-                        &self.input,
-                    ) {
-                        err = Some(e);
-                        break;
+                {
+                    let rp = &self.programs[&prog_id];
+                    for s in &steps {
+                        let value = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+                        self.event.emit(EventData::ActionDispatched {
+                            program_id: prog_id,
+                            step: value,
+                            target: None,
+                        });
+                        if let Err(e) = crate::body::dispatch_action(
+                            s,
+                            &rp.program.predicates,
+                            &frame,
+                            now_ms,
+                            &rp.assets,
+                            &self.perception,
+                            prog_id,
+                            &self.input,
+                        ) {
+                            err = Some(e);
+                            break;
+                        }
                     }
                 }
                 if let Some(e) = err {
@@ -470,7 +473,7 @@ impl Scheduler {
                 &rp.program.predicates,
                 &frame,
                 now_ms,
-                &assets,
+                &rp.assets,
                 &self.perception,
                 &self.input,
             );
@@ -625,6 +628,7 @@ mod tests {
             .send(SchedulerCommand::SubmitValidated {
                 program_id: id,
                 program: empty_program(),
+                assets: BTreeMap::new(),
             })
             .unwrap();
         cmd_tx.send(SchedulerCommand::Shutdown).unwrap();

@@ -74,6 +74,7 @@ fn one_shot_watch_fires_once_and_completes() {
         .send(SchedulerCommand::SubmitValidated {
             program_id: id,
             program,
+            assets: BTreeMap::new(),
         })
         .unwrap();
 
